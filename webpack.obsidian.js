@@ -8,10 +8,10 @@ const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const ZoteroLocalePlugin = require("./webpack.zotero-locale-plugin");
 
-function generateReaderConfig(build) {
+function generateReaderConfig(build, mode) {
 	let config = {
 		name: build,
-		mode: build === "dev" ? "development" : "production",
+		mode: mode,
 		devtool: false,
 		entry: {
 			reader: [
@@ -43,21 +43,12 @@ function generateReaderConfig(build) {
 									"@babel/preset-env",
 									{
 										useBuiltIns: false,
-										targets:
-											build === "zotero" ||
-											build === "dev"
-												? { electron: 34, chrome: 132 }
-												: undefined,
+										targets: { electron: 34, chrome: 132 },
 									},
 								],
 							],
 						},
 					},
-				},
-				build === "dev" && {
-					test: /\.tsx?$/,
-					exclude: /node_modules/,
-					use: "ts-loader",
 				},
 				{
 					test: /\.s?css$/,
@@ -143,34 +134,9 @@ function generateReaderConfig(build) {
 		"prop-types": "PropTypes",
 	};
 
-	if (build === "dev") {
-		config.plugins.push(
-			new CopyWebpackPlugin({
-				patterns: [
-					{ from: "demo/epub/demo.epub", to: "./" },
-					{ from: "demo/pdf/demo.pdf", to: "./" },
-					{ from: "demo/snapshot/demo.html", to: "./" },
-				],
-				options: {},
-			})
-		);
-		config.devServer = {
-			static: {
-				directory: path.resolve(__dirname, "build/"),
-				watch: true,
-			},
-			devMiddleware: {
-				writeToDisk: true,
-			},
-			// open: "/dev/reader.html?type=pdf",
-			// port: 3000,
-		};
-	}
-
 	return config;
 }
 
-module.exports = [
-	generateReaderConfig("obsidian"),
-	generateReaderConfig("dev"),
-];
+module.exports = (env, argv) => {
+	return generateReaderConfig("obsidian", argv.mode || "development");
+};
