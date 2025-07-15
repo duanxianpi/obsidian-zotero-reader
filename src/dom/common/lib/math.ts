@@ -1,3 +1,5 @@
+import { renderMathInternal } from './math-internal'
+
 export async function renderMath(doc: Document) {
 	// We use the text/x-mathjax-config script as a signal to detect MathJax
 	// because that's what Calibre (and Apple Books?) does, but we don't
@@ -11,7 +13,7 @@ export async function renderMath(doc: Document) {
 		return;
 	}
 
-	(await import('./math-internal')).renderMathInternal(doc);
+	renderMathInternal(doc)
 }
 
 export function closestMathTeX(el: Element): string | null {
