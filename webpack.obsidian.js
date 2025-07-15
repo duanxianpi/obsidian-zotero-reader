@@ -1,66 +1,61 @@
-// A Wrapper for the Obsidian Zotero Reader Webpack config
-
+// webpack.reader.config.js
 const path = require("path");
-const HtmlWebpackPlugin = require("html-webpack-plugin");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
-const CssMinimizerPlugin = require("css-minimizer-webpack-plugin");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const ZoteroLocalePlugin = require("./webpack.zotero-locale-plugin");
 
 function generateReaderConfig(build, mode) {
-	let config = {
+	/** `src/index.obsidian.js`
+	 *  must contain **one line** that pulls in the stylesheet:
+	 *  import "./common/stylesheets/main.scss";
+	 */
+	return {
 		name: build,
-		mode: mode,
+		mode,
 		devtool: false,
+
+		// only keep single entry — CSS is imported from the JS file, otherwise output js won't be loaded in plugin's esbuild
 		entry: {
-			reader: [
-				"./src/index." + build + ".js",
-				"./src/common/stylesheets/main.scss",
-			],
+			reader: `./src/index.${build}.js`,
 		},
+
 		output: {
-			path: path.resolve(__dirname, "./build/" + build),
+			path: path.resolve(__dirname, "build", build),
 			filename: "reader.js",
-			libraryTarget: "umd",
+			libraryTarget: "var",
+			library: "ZotoreReader",
 			publicPath: "",
-			library: {
-				name: "reader",
-				type: "umd",
-				umdNamedDefine: true,
-			},
 		},
+
 		module: {
 			rules: [
 				{
 					test: /\.(ts|js)x?$/,
-					exclude: /node_modules/,
-					use: {
-						loader: "babel-loader",
-						options: {
-							presets: [
-								[
-									"@babel/preset-env",
-									{
-										useBuiltIns: false,
-										targets: { electron: 34, chrome: 132 },
-									},
-								],
+					exclude: [
+						/node_modules/,
+						path.resolve(__dirname, "src/dom/common/lib/find/worker.ts"),
+					],
+					loader: "babel-loader",
+					options: {
+						presets: [
+							[
+								"@babel/preset-env",
+								{
+									useBuiltIns: false,
+									targets: { electron: 34, chrome: 132 },
+								},
 							],
-						},
+						],
 					},
 				},
 				{
 					test: /\.s?css$/,
-					exclude: path.resolve(__dirname, "./src/dom"),
+					exclude: path.resolve(__dirname, "src/dom"),
 					use: [
 						MiniCssExtractPlugin.loader,
-						{
-							loader: "css-loader",
-						},
-						{
-							loader: "postcss-loader",
-						},
+						"css-loader",
+						"postcss-loader",
 						{
 							loader: "sass-loader",
 							options: {
@@ -71,11 +66,9 @@ function generateReaderConfig(build, mode) {
 				},
 				{
 					test: /\.scss$/,
-					include: path.resolve(__dirname, "./src/dom"),
+					include: path.resolve(__dirname, "src/dom"),
 					use: [
-						{
-							loader: "raw-loader",
-						},
+						"raw-loader",
 						{
 							loader: "sass-loader",
 							options: {
@@ -89,15 +82,18 @@ function generateReaderConfig(build, mode) {
 					issuer: /\.[jt]sx?$/,
 					use: ["@svgr/webpack"],
 				},
+				{ test: /\.ftl$/, type: "asset/source" },
 				{
-					test: /\.ftl$/,
-					type: "asset/source",
+					test: /worker\.ts$/, // Bundle worker files
+					include: path.resolve(__dirname, "src/dom/common/lib/find"),
+					use: "babel-loader", // first turn TS → JS
+					type: "asset/source", // then export that JS as plain text
 				},
-			].filter(Boolean),
+			],
 		},
-		resolve: {
-			extensions: [".js", ".ts", ".tsx"],
-		},
+
+		resolve: { extensions: [".js", ".ts", ".tsx"] },
+
 		plugins: [
 			new ZoteroLocalePlugin({
 				files: ["zotero.ftl", "reader.ftl"],
@@ -107,34 +103,24 @@ function generateReaderConfig(build, mode) {
 			new CleanWebpackPlugin({
 				cleanOnceBeforeBuildPatterns: ["**/*", "!pdf/**"],
 			}),
-			new MiniCssExtractPlugin({
-				filename: "[name].css",
-			}),
-			new HtmlWebpackPlugin({
-				template: "./index.reader.html",
-				filename: "./[name].html",
-				templateParameters: {
-					build,
-				},
-			}),
+			new MiniCssExtractPlugin({ filename: "[name].css" }),
 			new CopyWebpackPlugin({
 				patterns: [
 					{
 						from: "node_modules/mathjax-full/ts/output/chtml/fonts/tex-woff-v2/*.woff",
-						to: "./mathjax-fonts/[name].woff",
+						to: "./mathjax-fonts/[name][ext]",
 					},
 				],
 			}),
 		],
-	};
 
-	config.externals = {
-		react: "React",
-		"react-dom": "ReactDOM",
-		"prop-types": "PropTypes",
+		optimization: {
+			splitChunks: false,
+			runtimeChunk: false,
+			minimize: mode === "production",
+			usedExports: false,
+		},
 	};
-
-	return config;
 }
 
 module.exports = (env, argv) => {
