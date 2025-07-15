@@ -17,7 +17,7 @@ export function renderMathInternal(doc: Document) {
 
 	let mjDoc = mathjax.document(doc, {
 		InputJax: new TeX({ packages: AllPackages }),
-		OutputJax: new CHTML({ fontURL: new URL('mathjax-fonts', document.location.href).toString() })
+		OutputJax: new CHTML({ fontURL: new URL('', document.location.href).toString() })
 	}) as HTMLDocument<Node, Text, Document>;
 	mjDoc.render();
 	for (let item of mjDoc.math) {

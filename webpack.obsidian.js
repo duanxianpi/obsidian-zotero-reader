@@ -25,6 +25,10 @@ function generateReaderConfig(build, mode) {
 			filename: "reader.js",
 			libraryTarget: "var",
 			library: "ZotoreReader",
+			// library: {
+			//   type: "commonjs-module", // plain `module.exports = …`
+			//   export: "default"        // expose the *default* export
+			// },
 			publicPath: "",
 		},
 
@@ -34,7 +38,10 @@ function generateReaderConfig(build, mode) {
 					test: /\.(ts|js)x?$/,
 					exclude: [
 						/node_modules/,
-						path.resolve(__dirname, "src/dom/common/lib/find/worker.ts"),
+						path.resolve(
+							__dirname,
+							"src/dom/common/lib/find/worker.ts"
+						),
 					],
 					loader: "babel-loader",
 					options: {
@@ -89,6 +96,24 @@ function generateReaderConfig(build, mode) {
 					use: "babel-loader", // first turn TS → JS
 					type: "asset/source", // then export that JS as plain text
 				},
+				{
+					test: /tex\.js$/,
+					include: [
+						path.dirname(
+							require.resolve(
+								"mathjax-full/js/output/chtml/fonts/tex.js"
+							)
+						),
+					],
+					use: [
+						{
+							loader: path.resolve(
+								__dirname,
+								"webpack.inline-mathjax-font-loader.js"
+							),
+						},
+					],
+				},
 			],
 		},
 
@@ -104,14 +129,6 @@ function generateReaderConfig(build, mode) {
 				cleanOnceBeforeBuildPatterns: ["**/*", "!pdf/**"],
 			}),
 			new MiniCssExtractPlugin({ filename: "[name].css" }),
-			new CopyWebpackPlugin({
-				patterns: [
-					{
-						from: "node_modules/mathjax-full/ts/output/chtml/fonts/tex-woff-v2/*.woff",
-						to: "./mathjax-fonts/[name][ext]",
-					},
-				],
-			}),
 		],
 
 		optimization: {
