@@ -18,7 +18,6 @@ module.exports = function (source) {
 		/url\("%%URL%%\/([A-Za-z0-9_-]+\.woff[0-9]?)"\)\s*format\("woff[0-9]?"\)/g;
 
 	return source.replace(pattern, (_, fontFile) => {
-		console.log(`+ Processing font: ${fontFile}`);
 		// Resolve the real font path once; throws if the font is missing
 		const fontPath = require.resolve(
 			`mathjax-full/ts/output/chtml/fonts/tex-woff-v2/${fontFile}`

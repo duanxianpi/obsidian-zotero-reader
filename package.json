@@ -20,6 +20,7 @@
 		"@abejellinek/readability-keep-nodes": "^1.0.0",
 		"@fluent/bundle": "^0.19.1",
 		"@fluent/react": "^0.15.2",
+		"cheerio": "^1.1.0",
 		"classnames": "^2.3.1",
 		"darkreader": "^4.9.83",
 		"epubjs": "file:epubjs/epub.js",

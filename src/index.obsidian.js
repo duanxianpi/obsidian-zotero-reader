@@ -1,12 +1,51 @@
 import Reader from "./common/reader";
 import "./common/stylesheets/main.scss";
-
+import inlineResources from "./inline-resources";
+import { patchPDFViewerHTML, patchViewerCSS } from "./patch-inline-resources";
 /**
  * ObsidianZoteroReaderFactory Factory - Creates and manages reader instances for Obsidian plugin
  */
 class ObsidianZoteroReaderFactory {
 	constructor() {
 		this.instances = new Map(); // Track multiple reader instances
+
+		this.initializeBlobUrls();
+	}
+
+	/**
+	 * Initialize blob URLs for inline resources
+	 */
+	initializeBlobUrls() {
+		if (globalThis.BLOB_URL_MAP) {
+			console.log("Blob URL map available:", this.blobUrlMap);
+		} else {
+			globalThis.BLOB_URL_MAP = {};
+
+			for (const [fileName, { base64, type }] of Object.entries(
+				inlineResources
+			)) {
+				const byteCharacters = atob(base64);
+				const byteNumbers = Array.from(byteCharacters, (char) =>
+					char.charCodeAt(0)
+				);
+				const byteArray = new Uint8Array(byteNumbers);
+				const blob = new Blob([byteArray], {
+					type: type || "application/octet-stream",
+				});
+				const url = URL.createObjectURL(blob);
+				globalThis.BLOB_URL_MAP[fileName] = url;
+				console.info(
+					`Register Blob URL for ${fileName}: ${url}, type: ${type}`
+				);
+			}
+
+			// Patch the css first
+			patchViewerCSS();
+
+			// Patch the viewer.html
+			patchPDFViewerHTML();
+			
+		}
 	}
 
 	/**

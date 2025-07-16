@@ -58,7 +58,10 @@ function generateReaderConfig(build, mode) {
 				},
 				{
 					test: /\.s?css$/,
-					exclude: path.resolve(__dirname, "src/dom"),
+					exclude: [
+						path.resolve(__dirname, "src/dom"),
+						path.resolve(__dirname, "build/obsidian/pdf"),
+					],
 					use: [
 						MiniCssExtractPlugin.loader,
 						"css-loader",
@@ -91,13 +94,13 @@ function generateReaderConfig(build, mode) {
 				},
 				{ test: /\.ftl$/, type: "asset/source" },
 				{
-					test: /worker\.ts$/, // Bundle worker files
+					test: /worker\.ts$/, // Bundle find worker files
 					include: path.resolve(__dirname, "src/dom/common/lib/find"),
 					use: "babel-loader", // first turn TS → JS
 					type: "asset/source", // then export that JS as plain text
 				},
 				{
-					test: /tex\.js$/,
+					test: /tex\.js$/, // Inline MathJax TeX font URLs
 					include: [
 						path.dirname(
 							require.resolve(
@@ -113,6 +116,17 @@ function generateReaderConfig(build, mode) {
 							),
 						},
 					],
+				},
+				{
+					test: /.*/,
+					include: [path.resolve(__dirname, "build/obsidian/pdf")],
+					type: "asset/inline",
+					generator: {
+						dataUrl: (content) => {
+							const base64 = content.toString("base64");
+							return `data:application/octet-stream;base64,${base64}`;
+						},
+					},
 				},
 			],
 		},
@@ -132,7 +146,7 @@ function generateReaderConfig(build, mode) {
 		],
 
 		optimization: {
-			splitChunks: false,
+			splitChunks: false, // no need to split chunks, we only have one entry
 			runtimeChunk: false,
 			minimize: mode === "production",
 			usedExports: false,
