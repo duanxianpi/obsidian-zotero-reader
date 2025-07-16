@@ -190,11 +190,11 @@ export function patchPDFViewerHTML() {
 	// Test the patched fetch
 	fetch('standard_fonts/FoxitFixedBoldItalic.pfb').then((response) => {
 		if (response.ok) {
-		console.log('Font loaded successfully via blob URL fetch');
+		console.debug('Font loaded successfully via blob URL fetch');
 		return response.arrayBuffer();
 		}
 	}).then(buffer => {
-		if (buffer) console.log('Font data:', buffer.byteLength, 'bytes');
+		if (buffer) console.debug('Font data:', buffer.byteLength, 'bytes');
 	});
 
 	// Test the patched XMLHttpRequest
@@ -202,8 +202,8 @@ export function patchPDFViewerHTML() {
 	xhr.open('GET', 'standard_fonts/FoxitFixedBoldItalic.pfb', true);
 	xhr.responseType = 'arraybuffer';
 	xhr.onload = function () {
-		console.log('Font loaded successfully via blob URL XHR');
-		console.log('Font data:', this.response.byteLength, 'bytes');
+		console.debug('Font loaded successfully via blob URL XHR');
+		console.debug('Font data:', this.response.byteLength, 'bytes');
 	};
 	xhr.send();
 </script>

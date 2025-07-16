@@ -4,6 +4,7 @@ const MiniCssExtractPlugin = require("mini-css-extract-plugin");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const ZoteroLocalePlugin = require("./webpack.zotero-locale-plugin");
+const zlib = require("zlib");
 
 function generateReaderConfig(build, mode) {
 	/** `src/index.obsidian.js`
@@ -123,8 +124,9 @@ function generateReaderConfig(build, mode) {
 					type: "asset/inline",
 					generator: {
 						dataUrl: (content) => {
-							const base64 = content.toString("base64");
-							return `data:application/octet-stream;base64,${base64}`;
+							const gzipped = zlib.gzipSync(content);
+							const base64 = gzipped.toString("base64");
+							return `data:application/gzip;base64,${base64}`;
 						},
 					},
 				},
