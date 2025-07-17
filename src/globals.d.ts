@@ -6,6 +6,8 @@ declare interface Window {
 	DarkReader?: typeof import('darkreader');
 
 	zoteroPrint?: (options?: { overrideSettings?: Record<string, string> }) => Promise<void>;
+
+	BLOB_URL_MAP: Record<string, string>;
 }
 
 declare module '*.scss' {

@@ -3,9 +3,6 @@ import { FindState } from "../../../../common/types";
 import { PersistentRange } from "../range";
 import EPUBView from "../../../epub/epub-view";
 import type { InternalOutputRange, InternalSearchContext } from "./internal-types";
-/* @ts-ignore */
-import workerSrc from './worker';
-
 
 export interface FindProcessor {
 	getAnnotations(): FindAnnotation[];
@@ -239,9 +236,7 @@ class DefaultFindProcessor implements FindProcessor {
 		if (this._worker) {
 			throw new Error('Search is already running');
 		}
-		const blob = new Blob([workerSrc as unknown as string], { type: 'application/javascript' });
-		const url = URL.createObjectURL(blob);
-		let worker = new Worker(url, { type: 'module' });
+		let worker = new Worker(window.BLOB_URL_MAP['find-worker.js'],{ type: 'module' });
 		let promise = new Promise<InternalOutputRange[]>((resolve, reject) => {
 			worker.onmessage = (event) => {
 				resolve(event.data);

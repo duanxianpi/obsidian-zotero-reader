@@ -24,12 +24,12 @@ function generateReaderConfig(build, mode) {
 		output: {
 			path: path.resolve(__dirname, "build", build),
 			filename: "reader.js",
-			libraryTarget: "var",
-			library: "ZotoreReader",
-			// library: {
-			//   type: "commonjs-module", // plain `module.exports = …`
-			//   export: "default"        // expose the *default* export
-			// },
+			// libraryTarget: "var",
+			// library: "ZotoreReader",
+			library: {
+				type: "commonjs-module", // plain `module.exports = …`
+				export: "default", // expose the *default* export
+			},
 			publicPath: "",
 		},
 
@@ -37,13 +37,7 @@ function generateReaderConfig(build, mode) {
 			rules: [
 				{
 					test: /\.(ts|js)x?$/,
-					exclude: [
-						/node_modules/,
-						path.resolve(
-							__dirname,
-							"src/dom/common/lib/find/worker.ts"
-						),
-					],
+					exclude: [/node_modules/],
 					loader: "babel-loader",
 					options: {
 						presets: [
@@ -94,11 +88,21 @@ function generateReaderConfig(build, mode) {
 					use: ["@svgr/webpack"],
 				},
 				{ test: /\.ftl$/, type: "asset/source" },
+				// Special handling for worker.ts - compile AND provide as base64
 				{
-					test: /worker\.ts$/, // Bundle find worker files
+					test: /worker\.ts$/,
 					include: path.resolve(__dirname, "src/dom/common/lib/find"),
-					use: "babel-loader", // first turn TS → JS
-					type: "asset/source", // then export that JS as plain text
+
+					resourceQuery: /b64/, // …?b64
+					type: "asset/inline",
+					use: "ts-loader",
+					generator: {
+						dataUrl: (content) => {
+							const gzipped = zlib.gzipSync(content);
+							const base64 = gzipped.toString("base64");
+							return `data:application/gzip;base64,${base64}`;
+						},
+					},
 				},
 				{
 					test: /tex\.js$/, // Inline MathJax TeX font URLs
@@ -120,7 +124,13 @@ function generateReaderConfig(build, mode) {
 				},
 				{
 					test: /.*/,
-					include: [path.resolve(__dirname, "build/obsidian/pdf")],
+					include: [
+						path.resolve(__dirname, "build/obsidian/pdf"),
+						path.resolve(
+							__dirname,
+							"dom/common/lib/find/worker.ts"
+						),
+					],
 					type: "asset/inline",
 					generator: {
 						dataUrl: (content) => {

@@ -6,7 +6,7 @@ import * as cheerio from "cheerio";
  * It will replace the original URLs with data URLs instead.
  */
 
-export function patchViewerCSS() {
+function getPatchedViewerCSS() {
 	const currentViewerCSSBase64 = inlineResources["web/viewer.css"].base64;
 	const currentViewerCSS = atob(currentViewerCSSBase64);
 
@@ -31,14 +31,7 @@ export function patchViewerCSS() {
 		}
 	);
 
-	const byteNumbers = Array.from(adjustedCss, (char) => char.charCodeAt(0));
-	const byteArray = new Uint8Array(byteNumbers);
-	const blob = new Blob([byteArray], {
-		type: "text/css",
-	});
-	const url = URL.createObjectURL(blob);
-	globalThis.BLOB_URL_MAP["web/viewer.css"] = url;
-	console.info(`Patched CSS with data URL: ${url}, type: text/css`);
+	return adjustedCss;
 }
 
 /** This function is used to patch the PDF viewer HTML file to use the blob URLs
@@ -68,14 +61,16 @@ export function patchPDFViewerHTML() {
 	const $ = cheerio.load(text);
 
 	// <link rel="stylesheet">
-	$('link[rel="stylesheet"][href]').each((_, elem) => {
+	// Obisidian didn't support blob for href, so we need to inline the CSS
+	// and replace the link tag with a style tag
+	$('link[rel="stylesheet"][href="viewer.css"]').each((_, elem) => {
 		const href = $(elem).attr("href");
 		const hit = Object.keys(globalThis.BLOB_URL_MAP).find((k) =>
 			k.includes(href.match(/([^\/?#]+)(?:\?.*)?$/)[1])
 		);
 		if (hit) {
-			const url = globalThis.BLOB_URL_MAP[hit];
-			$(elem).attr("href", url);
+			// get the content of the CSS file
+			$(elem).replaceWith(`<style>${getPatchedViewerCSS()}</style>`);
 		} else {
 			console.warn(`No blob URL found for ${href}`);
 		}

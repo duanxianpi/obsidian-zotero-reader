@@ -1,7 +1,7 @@
 import { ungzip } from "pako";
+import workerZippedBase64 from "./dom/common/lib/find/worker.ts?b64";
 
-const context = require.context("../build/obsidian/pdf/", true, /.*/);
-
+const pdfjsContext = require.context("../build/obsidian/pdf/", true, /.*/);
 const mimeTypes = {
 	".pdf": "application/pdf",
 	".wasm": "application/wasm",
@@ -27,23 +27,22 @@ const mimeTypes = {
 	".icc": "application/vnd.iccprofile",
 };
 
-const inlineResources = context.keys().reduce((map, key) => {
-	const uint8ArrayToBase64 = (uint8Array) => {
-		let binary = "";
-		const len = uint8Array.length;
-		for (let i = 0; i < len; i++) {
-			binary += String.fromCharCode(uint8Array[i]);
-		}
-		return btoa(binary);
-	};
-
-	const gzippedBase64 = context(key).split(",")[1];
-	const gzippedBuffer = Uint8Array.from(atob(gzippedBase64), (c) =>
-		c.charCodeAt(0)
-	);
-
+const ungzipBase64 = (base64) => {
+	const gzippedBuffer = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 	const decompressedBuffer = ungzip(gzippedBuffer);
-	const decompressedBase64 = uint8ArrayToBase64(decompressedBuffer);
+
+	let binary = "";
+	const len = decompressedBuffer.length;
+	for (let i = 0; i < len; i++) {
+		binary += String.fromCharCode(decompressedBuffer[i]);
+	}
+	return btoa(binary);
+};
+
+const inlineResources = pdfjsContext.keys().reduce((map, key) => {
+	const gzippedBase64 = pdfjsContext(key).split(",")[1];
+	
+	const decompressedBase64 = ungzipBase64(gzippedBase64);
 
 	const fileName = key.replace("./", "");
 	map[fileName] = {
@@ -55,5 +54,10 @@ const inlineResources = context.keys().reduce((map, key) => {
 
 	return map;
 }, {});
+
+inlineResources["find-worker.js"] = {
+	base64: ungzipBase64(workerZippedBase64.split(",")[1]),
+	type: "application/javascript",
+};
 
 export default inlineResources;
