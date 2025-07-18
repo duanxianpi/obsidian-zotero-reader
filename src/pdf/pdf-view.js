@@ -155,7 +155,7 @@ class PDFView {
 
 		this._iframe = document.createElement('iframe');
 		this._iframe.addEventListener('load', () => this._iframe.classList.add('loaded'));
-		this._iframe.src = globalThis.BLOB_URL_MAP['web/viewer.html'];
+		this._iframe.src = globalThis.BLOB_URL_MAP['pdf/web/viewer.html'];
 
 		this._iframeWindow = null;
 

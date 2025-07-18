@@ -236,7 +236,10 @@ class DefaultFindProcessor implements FindProcessor {
 		if (this._worker) {
 			throw new Error('Search is already running');
 		}
-		let worker = new Worker(window.BLOB_URL_MAP['find-worker.js'],{ type: 'module' });
+
+		// Use to generate the worker js file, the real worker will be loaded through the BLOB_URL_MAP
+		import(/* webpackChunkName: "find-worker" */ './worker')
+		let worker = new Worker(window.BLOB_URL_MAP['find-worker.reader.js'],{ type: 'module' });
 		let promise = new Promise<InternalOutputRange[]>((resolve, reject) => {
 			worker.onmessage = (event) => {
 				resolve(event.data);

@@ -1,43 +1,48 @@
 // webpack.reader.config.js
 const path = require("path");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
+const CssMinimizerPlugin = require("css-minimizer-webpack-plugin");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
-const CopyWebpackPlugin = require("copy-webpack-plugin");
 const ZoteroLocalePlugin = require("./webpack.zotero-locale-plugin");
-const zlib = require("zlib");
+const HtmlWebpackPlugin = require("html-webpack-plugin");
+const InlineCssToHtmlPlugin = require("./webpack.inline-css-plugin");
+const InlineHtmlAssetsPlugin = require("./webpack.inline-html-assets-plugin");
+module.exports = (_env, argv) => {
+	const mode = argv.mode || "development";
 
-function generateReaderConfig(build, mode) {
-	/** `src/index.obsidian.js`
-	 *  must contain **one line** that pulls in the stylesheet:
-	 *  import "./common/stylesheets/main.scss";
-	 */
 	return {
-		name: build,
+		name: "obsidian",
 		mode,
 		devtool: false,
-
-		// only keep single entry — CSS is imported from the JS file, otherwise output js won't be loaded in plugin's esbuild
 		entry: {
-			reader: `./src/index.${build}.js`,
+			reader: [
+				"./src/index.obsidian.js",
+				"./src/common/stylesheets/main.scss",
+			],
 		},
-
 		output: {
-			path: path.resolve(__dirname, "build", build),
+			path: path.resolve(__dirname, "./build/obsidian"),
 			filename: "reader.js",
-			// libraryTarget: "var",
-			// library: "ZotoreReader",
-			library: {
-				type: "commonjs-module", // plain `module.exports = …`
-				export: "default", // expose the *default* export
-			},
+			libraryTarget: "umd",
 			publicPath: "",
+			library: {
+				name: "reader",
+				type: "umd",
+				umdNamedDefine: true,
+			},
 		},
-
+		optimization: {
+			minimize: mode === "production",
+			splitChunks: false, // obsidian does not support split chunks
+			runtimeChunk: false,
+			usedExports: false,
+			minimizer: [new CssMinimizerPlugin(), "..."],
+		},
 		module: {
 			rules: [
 				{
 					test: /\.(ts|js)x?$/,
-					exclude: [/node_modules/],
+					exclude: /node_modules/,
 					loader: "babel-loader",
 					options: {
 						presets: [
@@ -53,10 +58,7 @@ function generateReaderConfig(build, mode) {
 				},
 				{
 					test: /\.s?css$/,
-					exclude: [
-						path.resolve(__dirname, "src/dom"),
-						path.resolve(__dirname, "build/obsidian/pdf"),
-					],
+					exclude: path.resolve(__dirname, "src/dom"),
 					use: [
 						MiniCssExtractPlugin.loader,
 						"css-loader",
@@ -64,7 +66,7 @@ function generateReaderConfig(build, mode) {
 						{
 							loader: "sass-loader",
 							options: {
-								additionalData: `$platform: '${build}';`,
+								additionalData: `$platform: 'obsidian';`,
 							},
 						},
 					],
@@ -77,7 +79,7 @@ function generateReaderConfig(build, mode) {
 						{
 							loader: "sass-loader",
 							options: {
-								additionalData: `$platform: '${build}';`,
+								additionalData: `$platform: 'obsidian';`,
 							},
 						},
 					],
@@ -88,22 +90,6 @@ function generateReaderConfig(build, mode) {
 					use: ["@svgr/webpack"],
 				},
 				{ test: /\.ftl$/, type: "asset/source" },
-				// Special handling for worker.ts - compile AND provide as base64
-				{
-					test: /worker\.ts$/,
-					include: path.resolve(__dirname, "src/dom/common/lib/find"),
-
-					resourceQuery: /b64/, // …?b64
-					type: "asset/inline",
-					use: "ts-loader",
-					generator: {
-						dataUrl: (content) => {
-							const gzipped = zlib.gzipSync(content);
-							const base64 = gzipped.toString("base64");
-							return `data:application/gzip;base64,${base64}`;
-						},
-					},
-				},
 				{
 					test: /tex\.js$/, // Inline MathJax TeX font URLs
 					include: [
@@ -122,25 +108,7 @@ function generateReaderConfig(build, mode) {
 						},
 					],
 				},
-				{
-					test: /.*/,
-					include: [
-						path.resolve(__dirname, "build/obsidian/pdf"),
-						path.resolve(
-							__dirname,
-							"dom/common/lib/find/worker.ts"
-						),
-					],
-					type: "asset/inline",
-					generator: {
-						dataUrl: (content) => {
-							const gzipped = zlib.gzipSync(content);
-							const base64 = gzipped.toString("base64");
-							return `data:application/gzip;base64,${base64}`;
-						},
-					},
-				},
-			],
+			].filter(Boolean),
 		},
 
 		resolve: { extensions: [".js", ".ts", ".tsx"] },
@@ -154,18 +122,21 @@ function generateReaderConfig(build, mode) {
 			new CleanWebpackPlugin({
 				cleanOnceBeforeBuildPatterns: ["**/*", "!pdf/**"],
 			}),
+			new HtmlWebpackPlugin({
+				template: "./index.obsidian.reader.html",
+				filename: "./[name].html",
+				templateParameters: {
+					build: "obsidian",
+				},
+				inject: false,
+			}),
 			new MiniCssExtractPlugin({ filename: "[name].css" }),
+			new InlineHtmlAssetsPlugin({
+				leaveCSSFile: false,
+				leaveJSFile: false,
+				keepLinkTag: false,
+				keepScriptTag: false,
+			}),
 		],
-
-		optimization: {
-			splitChunks: false, // no need to split chunks, we only have one entry
-			runtimeChunk: false,
-			minimize: mode === "production",
-			usedExports: false,
-		},
 	};
-}
-
-module.exports = (env, argv) => {
-	return generateReaderConfig("obsidian", argv.mode || "development");
 };

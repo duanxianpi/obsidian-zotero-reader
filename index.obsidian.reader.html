@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html
+	lang="en"
+	dir="ltr"
+	style="
+		--sidebar-width: 240px;
+		--split-view-size: 50%;
+		--bottom-placeholder-height: 50px;
+		--toolbar-placeholder-width: 0px;
+	"
+>
+	<head>
+		<meta charset="UTF-8" />
+		<title>Zotero Reader</title>
+
+		<% for (const js of htmlWebpackPlugin.files.js) { %>
+		<script defer="defer" src="<%= js %>" type="module"></script>
+		<% } %>
+		
+		<% for (const css of htmlWebpackPlugin.files.css) { %>
+		<link rel="stylesheet" href="<%= css %>" />
+		<% } %>
+	</head>
+	<body class="sidebar-open">
+		<div id="reader-ui"></div>
+		<div id="split-view">
+			<div id="primary-view" class="primary-view"></div>
+			<div id="secondary-view" class="secondary-view"></div>
+		</div>
+		<div id="printContainer"></div>
+	</body>
+</html>
