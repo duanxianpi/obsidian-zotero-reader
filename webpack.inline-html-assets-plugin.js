@@ -77,10 +77,6 @@ class InlineHtmlAssetsPlugin {
 								data.html,
 								"js"
 							).forEach((name) => {
-								console.log(
-									"============================================================",
-									name
-								);
 								if (!assets[name]) return;
 								const js = assets[name].source().toString();
 								data.html = data.html.replace(

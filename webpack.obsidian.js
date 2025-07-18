@@ -5,8 +5,8 @@ const CssMinimizerPlugin = require("css-minimizer-webpack-plugin");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const ZoteroLocalePlugin = require("./webpack.zotero-locale-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
-const InlineCssToHtmlPlugin = require("./webpack.inline-css-plugin");
 const InlineHtmlAssetsPlugin = require("./webpack.inline-html-assets-plugin");
+
 module.exports = (_env, argv) => {
 	const mode = argv.mode || "development";
 
@@ -125,10 +125,8 @@ module.exports = (_env, argv) => {
 			new HtmlWebpackPlugin({
 				template: "./index.obsidian.reader.html",
 				filename: "./[name].html",
-				templateParameters: {
-					build: "obsidian",
-				},
 				inject: false,
+				cache: false,
 			}),
 			new MiniCssExtractPlugin({ filename: "[name].css" }),
 			new InlineHtmlAssetsPlugin({

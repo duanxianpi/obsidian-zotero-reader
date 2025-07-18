@@ -1,4 +1,5 @@
 import Reader from "./common/reader";
+import { WindowMessenger, connect } from "penpal";
 
 /**
  * Create an empty reader instance (without container or data)
@@ -98,4 +99,137 @@ async function createReader(options = {}) {
 	console.debug(
 		`Reader instance with ID ${instanceId} initialized successfully`
 	);
+
+	return reader;
 }
+
+// // Initialize Penpal connection with parent window
+// let parentConnection = null;
+// let readerInstance = null;
+
+// async function initializePenpalConnection() {
+// 	try {
+// 		parentConnection = Penpal.connectToParent({
+// 			// Methods exposed to the parent (view.ts)
+// 			methods: {
+// 				// Initialize reader with data from parent
+// 				async initializeReader(data, type, filename) {
+// 					console.log('Initializing reader with data from parent', { type, filename });
+
+// 					const options = {
+// 						data: { buf: data, type },
+// 						type,
+// 						filename,
+// 						onSaveAnnotations: async function (annotations) {
+// 							console.log("Save annotations", annotations);
+// 							// Send annotations to parent
+// 							if (parentConnection) {
+// 								await parentConnection.call('onAnnotationsSaved', annotations);
+// 							}
+// 						},
+// 						onDeleteAnnotations: function (ids) {
+// 							console.log("Delete annotations", JSON.stringify(ids));
+// 							// Send deleted annotation IDs to parent
+// 							if (parentConnection) {
+// 								parentConnection.call('onAnnotationsDeleted', ids);
+// 							}
+// 						},
+// 						onChangeViewState: function (state, primary) {
+// 							console.log("Set state", state, primary);
+// 							// Send view state changes to parent
+// 							if (parentConnection) {
+// 								parentConnection.call('onViewStateChanged', state, primary);
+// 							}
+// 						},
+// 						onAddToNote() {
+// 							// Request parent to add annotations to note
+// 							if (parentConnection) {
+// 								parentConnection.call('onAddToNote');
+// 							}
+// 						},
+// 					};
+
+// 					readerInstance = await createReader(options);
+// 					return { success: true, instanceId };
+// 				},
+
+// 				// Get current reader state
+// 				getReaderState() {
+// 					if (readerInstance) {
+// 						return {
+// 							annotations: readerInstance.getAnnotations ? readerInstance.getAnnotations() : [],
+// 							viewState: readerInstance.getViewState ? readerInstance.getViewState() : null,
+// 						};
+// 					}
+// 					return null;
+// 				},
+
+// 				// Update annotations from parent
+// 				updateAnnotations(annotations) {
+// 					if (readerInstance && readerInstance.setAnnotations) {
+// 						readerInstance.setAnnotations(annotations);
+// 						return { success: true };
+// 					}
+// 					return { success: false, error: 'Reader not initialized' };
+// 				},
+
+// 				// Navigate to specific page/location
+// 				navigateTo(location) {
+// 					if (readerInstance && readerInstance.navigate) {
+// 						readerInstance.navigate(location);
+// 						return { success: true };
+// 					}
+// 					return { success: false, error: 'Reader not initialized' };
+// 				},
+
+// 				// Get reader capabilities
+// 				getCapabilities() {
+// 					return {
+// 						canAnnotate: true,
+// 						canNavigate: true,
+// 						canExportAnnotations: true,
+// 						supportedFormats: ['pdf', 'epub']
+// 					};
+// 				}
+// 			}
+// 		});
+
+// 		console.log('Penpal connection established with parent');
+
+// 		// Notify parent that reader is ready
+// 		await parentConnection.call('onReaderReady');
+
+// 	} catch (error) {
+// 		console.error('Failed to establish Penpal connection:', error);
+// 	}
+// }
+
+try {
+	const messenger = new WindowMessenger({
+		remoteWindow: window.parent,
+		// Defaults to the current origin.
+		allowedOrigins: ["app://obsidian.md"],
+	});
+
+	const connection = connect({
+		messenger,
+		// Methods the iframe window is exposing to the parent window.
+		methods: {
+			init(BLOB_URL_MAP) {
+				window.BLOB_URL_MAP = BLOB_URL_MAP;
+				return true;
+			},
+			async createReader(options) {
+				createReader(options);
+			},
+		},
+	});
+
+	console.log("Penpal connection established with parent window");
+} catch (error) {
+	console.error("Failed to establish Penpal connection:", error);
+}
+// const remote = await connection.promise;
+// // Calling a remote method will always return a promise.
+// const additionResult = await remote.add(2, 6);
+// console.log(additionResult); // 8
