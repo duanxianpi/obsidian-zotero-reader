@@ -30,6 +30,7 @@ module.exports = (_env, argv) => {
 				type: "umd",
 				umdNamedDefine: true,
 			},
+			chunkFilename: "[name].reader.js",
 		},
 		optimization: {
 			minimize: mode === "production",
