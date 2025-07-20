@@ -181,6 +181,7 @@ class PDFView {
 			this._iframeWindow.PDFViewerApplicationOptions.set('disablePreferences', true);
 			this._iframeWindow.PDFViewerApplicationOptions.set('disableHistory', true);
 			this._iframeWindow.PDFViewerApplicationOptions.set('enableXfa', false);
+			this._iframeWindow.PDFViewerApplicationOptions.set('workerSrc', globalThis.BLOB_URL_MAP["pdf/build/pdf.worker.mjs"]);
 		};
 
 		window.addEventListener('webviewerloaded', () => {

@@ -1,111 +1,80 @@
+const cheerio = require('cheerio');
+
 class InlineHtmlAssetsPlugin {
-	constructor(options = {}) {
-		this.opt = {
-			inlineCSS: true,
-			inlineJS: true,
-			leaveCSSFile: false,
-			leaveJSFile: false,
-			keepLinkTag: false,
-			keepScriptTag: false,
-			...options,
-		};
-	}
+  constructor(options = {}) {
+    this.opt = {
+      // Only the four options you asked to keep:
+      leaveCSSFile: false,   // keep original .css asset file? (false = remove after inlining)
+      leaveJSFile: false,    // keep original .js asset file?  (false = remove)
+      keepLinkTag: false,    // keep original <link> tag alongside inline <style>?
+      keepScriptTag: false,  // keep original <script src=...> tag?
+      ...options,
+    };
+  }
 
-	static _escape(str) {
-		return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	}
+  _makeId(name) {
+    return `inlined-${name.replace(/[^\w-]/g, '_')}`;
+  }
 
-	/** Extract all href/src values that end with .css or .js from current HTML */
-	static _collect(html, ext) {
-		const rx =
-			ext === "css"
-				? /<link\s[^>]*href=["']([^"']+\.css)["'][^>]*>/gi
-				: /<script\s[^>]*src=["']([^"']+\.js)["'][^>]*><\/script>/gi;
-		const out = [];
-		let m;
-		while ((m = rx.exec(html))) out.push(m[1]);
-		return out;
-	}
+  _stripCharset(css) {
+    return css.replace(/\s*@charset\s+["'][^"']+["'];?/gi, '');
+  }
 
-	apply(compiler) {
-		const HtmlWebpackPlugin = require("html-webpack-plugin");
+  apply(compiler) {
+    const HtmlWebpackPlugin = require('html-webpack-plugin');
 
-		compiler.hooks.thisCompilation.tap(
-			"InlineHtmlAssetsPlugin",
-			(compilation) => {
-				HtmlWebpackPlugin.getHooks(compilation).beforeEmit.tapAsync(
-					"InlineHtmlAssetsPlugin",
-					(data, cb) => {
-						const { assets } = compilation;
+    compiler.hooks.thisCompilation.tap('InlineHtmlAssetsPlugin', compilation => {
+      const hooks = HtmlWebpackPlugin.getHooks(compilation);
 
-						/* ---------------- CSS ---------------- */
-						if (this.opt.inlineCSS) {
-							InlineHtmlAssetsPlugin._collect(
-								data.html,
-								"css"
-							).forEach((name) => {
-								if (!assets[name]) return; // safety
-								let css = assets[name].source().toString();
-								css = css.replace(
-									/\s*@charset\s+["'][^"']+["'];?/i,
-									""
-								); // invalid inline
-								data.html = data.html.replace(
-									/<\/head>/i,
-									(m) =>
-										`<style id="inlined-${name.replace(
-											/\W/g,
-											"_"
-										)}">\n${css}\n</style>\n${m}`
-								);
-								if (!this.opt.keepLinkTag) {
-									const linkRx = new RegExp(
-										`<link[^>]+href=["']${InlineHtmlAssetsPlugin._escape(
-											name
-										)}["'][^>]*>`,
-										"gi"
-									);
-									data.html = data.html.replace(linkRx, "");
-								}
-								if (!this.opt.leaveCSSFile) delete assets[name];
-							});
-						}
+      hooks.beforeEmit.tap('InlineHtmlAssetsPlugin', data => {
+        const $ = cheerio.load(data.html);
+        const { assets } = compilation;
 
-						/* ---------------- JS ---------------- */
-						if (this.opt.inlineJS) {
-							InlineHtmlAssetsPlugin._collect(
-								data.html,
-								"js"
-							).forEach((name) => {
-								if (!assets[name]) return;
-								const js = assets[name].source().toString();
-								data.html = data.html.replace(
-									/<\/body>/i,
-									(m) =>
-										`<script id="inlined-${name.replace(
-											/\W/g,
-											"_"
-										)}">\n${js}\n</script>\n${m}`
-								);
-								if (!this.opt.keepScriptTag) {
-									const scriptRx = new RegExp(
-										`<script[^>]+src=["']${InlineHtmlAssetsPlugin._escape(
-											name
-										)}["'][^>]*></script>`,
-										"gi"
-									);
-									data.html = data.html.replace(scriptRx, "");
-								}
-								if (!this.opt.leaveJSFile) delete assets[name];
-							});
-						}
+        // --- Inline CSS ---
+        $('link[rel="stylesheet"][href$=".css"]').each((_, el) => {
+          const $el = $(el);
+          const href = $el.attr('href');
+            if (!href || !assets[href]) return;
 
-						cb(null, data);
-					}
-				);
-			}
-		);
-	}
+          const css = this._stripCharset(assets[href].source().toString());
+          const styleTag = `<style id="${this._makeId(href)}">${css}</style>`;
+
+          if (this.opt.keepLinkTag) {
+            $el.before(styleTag);
+          } else {
+            $el.replaceWith(styleTag);
+          }
+
+          if (!this.opt.leaveCSSFile) {
+            delete assets[href];
+          }
+        });
+
+        // --- Inline JS ---
+        $('script[src$=".js"]').each((_, el) => {
+          const $el = $(el);
+          const src = $el.attr('src');
+          if (!src || !assets[src]) return;
+
+          const js = assets[src].source().toString();
+          const scriptTag = `<script id="${this._makeId(src)}" defer type="module">${js}</script>`;
+
+          if (this.opt.keepScriptTag) {
+            $el.before(scriptTag);
+          } else {
+            $el.replaceWith(scriptTag);
+          }
+
+          if (!this.opt.leaveJSFile) {
+            delete assets[src];
+          }
+        });
+
+        data.html = $.html();
+        return data;
+      });
+    });
+  }
 }
 
 module.exports = InlineHtmlAssetsPlugin;
