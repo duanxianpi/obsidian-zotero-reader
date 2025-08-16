@@ -55,6 +55,7 @@ import { AutoScroll } from './lib/auto-scroll';
 import { PDFThumbnails } from './pdf-thumbnails';
 import {
 	MIN_IMAGE_ANNOTATION_SIZE,
+	MIN_TEXT_ANNOTATION_WIDTH,
 	PDF_NOTE_DIMENSIONS,
 	A11Y_VIRT_CURSOR_DEBOUNCE_LENGTH
 } from '../common/defines';
@@ -181,6 +182,7 @@ class PDFView {
 			this._iframeWindow.PDFViewerApplicationOptions.set('disablePreferences', true);
 			this._iframeWindow.PDFViewerApplicationOptions.set('disableHistory', true);
 			this._iframeWindow.PDFViewerApplicationOptions.set('enableXfa', false);
+			this._iframeWindow.PDFViewerApplicationOptions.set('annotationEditorMode', -1);
 			this._iframeWindow.PDFViewerApplicationOptions.set('workerSrc', globalThis.BLOB_URL_MAP["pdf/build/pdf.worker.mjs"]);
 		};
 
@@ -743,19 +745,58 @@ class PDFView {
 		let rect = this.getPositionBoundingViewRect(position);
 
 		let { clientWidth, clientHeight, scrollWidth, scrollHeight } = element;
-
 		let verticalPadding = 5;
+
+		let scrollTop = element.scrollTop;
+		let scrollLeft = element.scrollLeft;
 
 		let x = rect[0];
 		let y = rect[1];
 
-		// Calculate the new scroll position to center the bounding rectangle
-		let left = x - (clientWidth / 2);
-		let top = y - (options.block === 'start' ? 0 : (clientHeight / 2)) - verticalPadding;
+		// Determine desired scroll positions
+		let left;
+		let top;
 
-		// Ensure the new scroll position does not go out of bounds
-		left = Math.max(0, Math.min(left, scrollWidth - clientWidth));
-		top = Math.max(0, Math.min(top, scrollHeight - clientHeight));
+		if (options.block === 'start') {
+			// Vertical: align to start
+			top = y;
+			// Horizontal: center by default
+			left = x - (clientWidth / 2);
+		}
+		else if (options.block === 'nearest') {
+			const MARGIN = 10;
+
+			// Vertical "nearest" behavior
+			if (y < scrollTop + MARGIN) {
+				top = y - MARGIN;
+			}
+			else if (y > scrollTop + clientHeight - MARGIN) {
+				top = y - clientHeight + MARGIN;
+			}
+			// else leave 'top' undefined so we don't change vertical scroll
+
+			// Horizontal "nearest" behavior
+			if (x < scrollLeft + MARGIN) {
+				left = x - MARGIN;
+			}
+			else if (x > scrollLeft + clientWidth - MARGIN) {
+				left = x - clientWidth + MARGIN;
+			}
+			// else leave 'left' undefined so we don't change horizontal scroll
+		}
+		else {
+			// Default: center both axes
+			left = x - (clientWidth / 2);
+			top = y - (clientHeight / 2) - verticalPadding;
+		}
+
+		// Clamp within bounds only if defined
+		if (typeof left === 'number') {
+			left = Math.max(0, Math.min(left, scrollWidth - clientWidth));
+		}
+		if (typeof top === 'number') {
+			top = Math.max(0, Math.min(top, scrollHeight - clientHeight));
+		}
 
 		let { first, last } = this._iframeWindow.PDFViewerApplication.pdfViewer._getVisiblePages();
 		let startPageIndex = first.id - 1;
@@ -764,12 +805,14 @@ class PDFView {
 		endPageIndex++;
 		let close = startPageIndex <= position.pageIndex && position.pageIndex <= endPageIndex;
 
-		// Scroll the element smoothly if it's close enough
-		element.scrollTo({
-			left,
-			top,
+		// Build scroll options, only include axes that are defined
+		let scrollOptions = {
 			behavior: close ? 'smooth' : 'instant'
-		});
+		};
+		if (typeof left === 'number') scrollOptions.left = left;
+		if (typeof top === 'number') scrollOptions.top = top;
+
+		element.scrollTo(scrollOptions);
 	}
 
 	setPageLabels(pageLabels) {
@@ -996,6 +1039,18 @@ class PDFView {
 		}
 		else {
 			this._onSetSelectionPopup();
+		}
+	}
+
+	_scrollSelectionHeadIntoView(selectionRanges) {
+		let selectionRange = selectionRanges.find(x => !x.collapsed && x.head);
+		if (selectionRange) {
+			let { chars } = this._pdfPages[selectionRange.pageIndex];
+			let char = chars[selectionRange.headOffset];
+			this.navigateToPosition({
+				pageIndex: selectionRange.pageIndex,
+				rects: [char.rect]
+			}, { block: 'nearest' });
 		}
 	}
 
@@ -1817,6 +1872,12 @@ class PDFView {
 	}
 
 	_handlePointerDown(event) {
+		// Prevent double-click word highlight on triple-click
+		if (this._creationTimeout) {
+			clearTimeout(this._creationTimeout);
+			this._creationTimeout = null;
+		}
+
 		if (event.pointerType === 'mouse') {
 			return;
 		}
@@ -2032,6 +2093,10 @@ class PDFView {
 	}
 
 	_handlePointerMove = throttle((event) => {
+		// Don't cancel a highlight/underline annotation just created in word selection mode
+		// when the highlight/underline tool is enabled
+		this._creationTimeout = null;
+
 		if (this._scrolling) {
 			return;
 		}
@@ -2143,18 +2208,19 @@ class PDFView {
 			if (action.annotation.type === 'ink') {
 				let [x, y] = originalPagePosition.rects[0];
 				let rect = getPositionBoundingRect(action.annotation.position);
+
 				if (action.dir.includes('l')) {
-					rect[0] = x;
+					rect[0] = Math.min(rect[2] - 1, x);
 				}
 				else if (action.dir.includes('r')) {
-					rect[2] = x;
+					rect[2] = Math.max(rect[0] + 1, x);
 				}
 
 				if (action.dir.includes('b')) {
-					rect[1] = y;
+					rect[1] = Math.min(rect[3] - 1, y);
 				}
 				else if (action.dir.includes('t')) {
-					rect[3] = y;
+					rect[3] = Math.max(rect[1] + 1, y);
 				}
 
 				let r1 = getPositionBoundingRect(action.annotation.position);
@@ -2211,17 +2277,17 @@ class PDFView {
 				}
 
 				if (action.dir.includes('l')) {
-					rect[0] = x;
+					rect[0] = Math.min(rect[2] - MIN_TEXT_ANNOTATION_WIDTH, x);
 				}
 				else if (action.dir.includes('r')) {
-					rect[2] = x;
+					rect[2] = Math.max(rect[0] + MIN_TEXT_ANNOTATION_WIDTH, x);
 				}
 
 				if (action.dir.includes('b')) {
-					rect[1] = y;
+					rect[1] = Math.min(rect[3] - MIN_TEXT_ANNOTATION_WIDTH, y);
 				}
 				else if (action.dir.includes('t')) {
-					rect[3] = y;
+					rect[3] = Math.max(rect[1] + MIN_TEXT_ANNOTATION_WIDTH, y);
 				}
 
 				let fontSize = 0;
@@ -2566,13 +2632,24 @@ class PDFView {
 					this._onSelectAnnotations([], event);
 				}
 				if (action.type === 'selectText') {
-					// TODO: Handle triple click as well. Likely there should be a delay when action.mode is 'word'
 					if (['highlight', 'underline'].includes(this._tool.type)) {
 						if (this._selectionRanges.length && !this._selectionRanges[0].collapsed) {
 							let annotation = this._getAnnotationFromSelectionRanges(this._selectionRanges, this._tool.type, this._tool.color);
 							annotation.sortIndex = getSortIndex(this._pdfPages, annotation.position);
-							this._onAddAnnotation(annotation);
-							this._setSelectionRanges();
+							let createAnnotation = () => {
+								this._onAddAnnotation(annotation);
+								this._setSelectionRanges();
+								this._render();
+							};
+							if (action.mode === 'chars') {
+								createAnnotation();
+							}
+							else if (action.mode === 'words') {
+								this._creationTimeout = setTimeout(createAnnotation, 500);
+							}
+							else if (action.mode === 'lines') {
+								createAnnotation();
+							}
 						}
 					}
 					else {
@@ -2685,7 +2762,8 @@ class PDFView {
 				selectableAnnotation = (this.getSelectableAnnotations(position) || [])[0];
 			}
 			let selectedAnnotations = this.getSelectedAnnotations();
-			if (!selectableAnnotation) {
+			let overSelection = this._selectionRanges.some(x => intersectAnnotationWithPoint(x.position, position));
+			if (overSelection || !selectableAnnotation) {
 				if (this._selectedAnnotationIDs.length !== 0) {
 					this._onSelectAnnotations([], event);
 				}
@@ -2781,15 +2859,19 @@ class PDFView {
 			event.preventDefault();
 			if (key === 'Shift-ArrowLeft') {
 				this._setSelectionRanges(getModifiedSelectionRanges(this._pdfPages, this._selectionRanges, 'left'));
+				this._scrollSelectionHeadIntoView(this._selectionRanges);
 			}
 			else if (key === 'Shift-ArrowRight') {
 				this._setSelectionRanges(getModifiedSelectionRanges(this._pdfPages, this._selectionRanges, 'right'));
+				this._scrollSelectionHeadIntoView(this._selectionRanges);
 			}
 			else if (key === 'Shift-ArrowUp') {
 				this._setSelectionRanges(getModifiedSelectionRanges(this._pdfPages, this._selectionRanges, 'up'));
+				this._scrollSelectionHeadIntoView(this._selectionRanges);
 			}
 			else if (key === 'Shift-ArrowDown') {
 				this._setSelectionRanges(getModifiedSelectionRanges(this._pdfPages, this._selectionRanges, 'down'));
+				this._scrollSelectionHeadIntoView(this._selectionRanges);
 			}
 			this._render();
 		}
@@ -2874,6 +2956,7 @@ class PDFView {
 					let { text, sortIndex, position } = annotation2;
 					this._onUpdateAnnotations([{ id, text, sortIndex, position }]);
 					this._onSetAnnotationPopup();
+					this._scrollSelectionHeadIntoView(selectionRanges);
 				}
 				event.stopPropagation();
 				event.preventDefault();
@@ -2915,6 +2998,7 @@ class PDFView {
 					let { text, sortIndex, position } = annotation2;
 					this._onUpdateAnnotations([{ id, text, sortIndex, position }]);
 					this._onSetAnnotationPopup();
+					this._scrollSelectionHeadIntoView(selectionRanges);
 				}
 				event.stopPropagation();
 				event.preventDefault();
@@ -3394,11 +3478,14 @@ class PDFView {
 		if (event.dataTransfer.dropEffect === 'none') {
 			this.action = null;
 		}
-		this._handlePointerUp(event);
+		this.action = null;
+		this.pointerDownPosition = null;
+		this._pointerDownTriggered = false;
+		this._render();
 	}
 
 	_handleDrop(event) {
-
+		this._handlePointerUp(event);
 	}
 
 	_handleCopy(event) {

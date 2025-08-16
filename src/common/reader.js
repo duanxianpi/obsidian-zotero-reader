@@ -199,6 +199,7 @@ class Reader {
 				highlightAll: true,
 				caseSensitive: false,
 				entireWord: false,
+				index: null,
 				result: null,
 			},
 			secondaryViewState: null,
@@ -213,6 +214,7 @@ class Reader {
 				highlightAll: true,
 				caseSensitive: false,
 				entireWord: false,
+				index: null,
 				result: null
 			},
 		};
@@ -1302,10 +1304,6 @@ class Reader {
 		// Note: Using this._state.selectedAnnotationIDs.length here and below to avoid
 		// https://github.com/zotero/zotero/issues/3381 (annotation selection, even passing an empty array,
 		// also triggers text deselection)
-		// TODO: This prevents annotation deselection when holding shift and trying to select text under the annotation
-		if (this._state.selectedAnnotationIDs.length && !ids.length && triggeredFromView && (shift || mod)) {
-			return;
-		}
 
 		// TODO: This is temporary, until annotation selection and focus management is reworked
 		if (this._state.selectedAnnotationIDs.length && !triggeringEvent && !shift && mod && !this._keyboardManager.pointerDown) {
@@ -1313,6 +1311,9 @@ class Reader {
 		}
 
 		let reselecting = ids.length === 1 && this._state.selectedAnnotationIDs.includes(ids[0]);
+
+		// Cache previous focus before it may be updated below
+		let prevLastSelectedAnnotationID = this._lastSelectedAnnotationID;
 
 		if (ids[0]) {
 			this._lastSelectedAnnotationID = ids[0];
@@ -1328,33 +1329,44 @@ class Reader {
 					let selectedIDs = this._state.selectedAnnotationIDs.slice();
 					let annotations = this._state.annotations.filter(x => !x._hidden);
 
-					let annotationIndex = annotations.findIndex(x => x.id === id);
-					let lastSelectedIndex = annotations.findIndex(x => x.id === selectedIDs.slice(-1)[0]);
-					let selectedIndices = selectedIDs.map(id => annotations.findIndex(annotation => annotation.id === id));
-					let minSelectedIndex = Math.min(...selectedIndices);
-					let maxSelectedIndex = Math.max(...selectedIndices);
-					if (annotationIndex < minSelectedIndex) {
-						for (let i = annotationIndex; i < minSelectedIndex; i++) {
-							selectedIDs.push(annotations[i].id);
-						}
-					}
-					else if (annotationIndex > maxSelectedIndex) {
-						for (let i = maxSelectedIndex + 1; i <= annotationIndex; i++) {
-							selectedIDs.push(annotations[i].id);
-						}
+					let idxOf = (aid) => annotations.findIndex(a => a.id === aid);
+					let curIndex = annotations.findIndex(x => x.id === id);
+
+					// Derive an anchor from current selection and previous focus
+					let anchorIndex;
+					if (selectedIDs.length === 1) {
+						anchorIndex = idxOf(selectedIDs[0]);
 					}
 					else {
-						for (let i = Math.min(annotationIndex, lastSelectedIndex); i <= Math.max(annotationIndex, lastSelectedIndex); i++) {
-							if (i === lastSelectedIndex) {
-								continue;
-							}
-							let id = annotations[i].id;
-							if (!selectedIDs.includes(id)) {
-								selectedIDs.push(id);
-							}
+						let selectedIdxs = selectedIDs.map(idxOf).filter(i => i >= 0).sort((a, b) => a - b);
+						let low = selectedIdxs[0];
+						let high = selectedIdxs[selectedIdxs.length - 1];
+						let prevIdx = idxOf(prevLastSelectedAnnotationID);
+
+						if (prevIdx >= 0) {
+							// Use the endpoint opposite to the previous focus as the anchor
+							anchorIndex = Math.abs(prevIdx - low) <= Math.abs(prevIdx - high) ? high : low;
+						}
+						else {
+							// Fallback: pick the endpoint farther from the current index
+							anchorIndex = Math.abs(curIndex - low) >= Math.abs(curIndex - high) ? low : high;
 						}
 					}
-					this._updateState({ selectedAnnotationIDs: selectedIDs });
+
+					// Select exactly the continuous range between anchor and current item (inclusive)
+					if (curIndex >= 0 && anchorIndex >= 0) {
+						let start = Math.min(anchorIndex, curIndex);
+						let end = Math.max(anchorIndex, curIndex);
+						selectedIDs = [];
+						for (let i = start; i <= end; i++) {
+							selectedIDs.push(annotations[i].id);
+						}
+						this._updateState({ selectedAnnotationIDs: selectedIDs });
+					}
+					else {
+						// Fallback: keep previous selection if indices are not resolvable
+						this._updateState({ selectedAnnotationIDs: selectedIDs });
+					}
 				}
 				else if (mod && this._state.selectedAnnotationIDs.length) {
 					let selectedIDs = this._state.selectedAnnotationIDs.slice();

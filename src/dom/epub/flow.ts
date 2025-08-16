@@ -541,28 +541,28 @@ export class PaginatedFlow extends AbstractFlow {
 		this._sectionsContainer = this._iframeDocument.body.querySelector(':scope > .sections') as HTMLElement;
 		this._swipeIndicators = this._iframeDocument.querySelector('.swipe-indicators') as HTMLElement;
 
-		this._iframeDocument.addEventListener('keydown', this._handleKeyDown, { capture: true });
-		this._iframeDocument.addEventListener('pointerdown', this._handlePointerDown);
-		this._iframeDocument.addEventListener('pointermove', this._handlePointerMove);
-		this._iframeDocument.addEventListener('pointerup', this._handlePointerUp);
-		this._iframeDocument.addEventListener('pointerout', this._handlePointerCancel);
-		this._iframeDocument.addEventListener('pointercancel', this._handlePointerCancel);
-		this._iframeDocument.addEventListener('wheel', this._handleWheel, { passive: false });
-		this._iframeDocument.addEventListener('selectionchange', this._handleSelectionChange);
+		this._iframeDocument.documentElement.addEventListener('keydown', this._handleKeyDown, { capture: true });
+		this._iframeDocument.documentElement.addEventListener('pointerdown', this._handlePointerDown);
+		this._iframeDocument.documentElement.addEventListener('pointermove', this._handlePointerMove);
+		this._iframeDocument.documentElement.addEventListener('pointerup', this._handlePointerUp);
+		this._iframeDocument.documentElement.addEventListener('pointerout', this._handlePointerCancel);
+		this._iframeDocument.documentElement.addEventListener('pointercancel', this._handlePointerCancel);
+		this._iframeDocument.documentElement.addEventListener('wheel', this._handleWheel, { passive: false });
+		this._iframeDocument.documentElement.addEventListener('selectionchange', this._handleSelectionChange);
 		this._iframe.classList.add('flow-mode-paginated');
 		this._iframeDocument.body.classList.add('flow-mode-paginated');
 	}
 
 	override destroy(): void {
 		super.destroy();
-		this._iframeDocument.removeEventListener('keydown', this._handleKeyDown, { capture: true });
-		this._iframeDocument.removeEventListener('pointerdown', this._handlePointerDown);
-		this._iframeDocument.removeEventListener('pointermove', this._handlePointerMove);
-		this._iframeDocument.removeEventListener('pointerup', this._handlePointerUp);
-		this._iframeDocument.removeEventListener('pointerout', this._handlePointerCancel);
-		this._iframeDocument.removeEventListener('pointercancel', this._handlePointerCancel);
-		this._iframeDocument.removeEventListener('wheel', this._handleWheel);
-		this._iframeDocument.removeEventListener('selectionchange', this._handleSelectionChange);
+		this._iframeDocument.documentElement.removeEventListener('keydown', this._handleKeyDown, { capture: true });
+		this._iframeDocument.documentElement.removeEventListener('pointerdown', this._handlePointerDown);
+		this._iframeDocument.documentElement.removeEventListener('pointermove', this._handlePointerMove);
+		this._iframeDocument.documentElement.removeEventListener('pointerup', this._handlePointerUp);
+		this._iframeDocument.documentElement.removeEventListener('pointerout', this._handlePointerCancel);
+		this._iframeDocument.documentElement.removeEventListener('pointercancel', this._handlePointerCancel);
+		this._iframeDocument.documentElement.removeEventListener('wheel', this._handleWheel);
+		this._iframeDocument.documentElement.removeEventListener('selectionchange', this._handleSelectionChange);
 		this._iframe.classList.remove('flow-mode-paginated');
 		this._iframeDocument.body.classList.remove('flow-mode-paginated');
 	}
@@ -820,7 +820,10 @@ export class PaginatedFlow extends AbstractFlow {
 	};
 
 	private _handlePointerMove = (event: PointerEvent) => {
-		if (!this._touchDown || !event.isPrimary || event.buttons % 1 !== 0) {
+		if (!this._touchDown
+				|| !event.isPrimary
+				|| event.buttons % 1 !== 0
+				|| !this._iframeDocument.getSelection()!.isCollapsed) {
 			return;
 		}
 		let swipeAmount = (event.clientX - this._touchStartX) / PAGE_TURN_SWIPE_LENGTH_PX;
@@ -835,10 +838,12 @@ export class PaginatedFlow extends AbstractFlow {
 	};
 
 	private _handlePointerUp = (event: PointerEvent) => {
-		if (!this._touchDown || !event.isPrimary) {
+		if (!this._touchDown
+				|| !event.isPrimary
+				// No event.buttons check - "buttons" have now been released
+				|| !this._iframeDocument.getSelection()!.isCollapsed) {
 			return;
 		}
-		event.preventDefault();
 		this._swipeIndicators.style.setProperty('--swipe-amount', '0');
 		this._touchDown = false;
 
@@ -846,9 +851,11 @@ export class PaginatedFlow extends AbstractFlow {
 		let swipeAmount = (event.clientX - this._touchStartX) / PAGE_TURN_SWIPE_LENGTH_PX;
 		if (swipeAmount <= -1) {
 			this.navigateRight();
+			event.preventDefault();
 		}
 		else if (swipeAmount >= 1) {
 			this.navigateLeft();
+			event.preventDefault();
 		}
 		// If there's no selection, allow single-tap page turns
 		else if (this._iframeWindow.getSelection()!.isCollapsed
@@ -858,15 +865,19 @@ export class PaginatedFlow extends AbstractFlow {
 				&& !(event.target as Element).closest('a, .clickable-image')) {
 			if (event.clientX >= this._iframeWindow.innerWidth - PAGE_TURN_TAP_MARGIN_PX) {
 				this.navigateRight();
+				event.preventDefault();
 			}
 			else if (event.clientX <= PAGE_TURN_TAP_MARGIN_PX) {
 				this.navigateLeft();
+				event.preventDefault();
 			}
 		}
 	};
 
 	private _handlePointerCancel = (event: PointerEvent) => {
-		if (!this._touchDown || !event.isPrimary) {
+		if (!this._touchDown
+				|| !event.isPrimary) {
+			// No event.buttons check - "buttons" have now been released
 			return;
 		}
 		this._touchDown = false;

@@ -2,6 +2,7 @@ import { approximateMatch } from './lib/approximate-match';
 import { ANNOTATION_POSITION_MAX_SIZE } from './defines';
 import { basicDeepEqual, sortTags } from './lib/utilities';
 import { isSelector } from "../dom/common/lib/selector";
+import { roundPositionValues } from '../pdf/lib/utilities';
 
 const DEBOUNCE_TIME = 1000; // 1s
 const DEBOUNCE_MAX_TIME = 10000; // 10s
@@ -89,12 +90,8 @@ class AnnotationManager {
 		if (this._authorName) {
 			annotation.isAuthorNameAuthoritative = true;
 		}
-		// Ensure numbers have 3 or less decimal places
-		if (annotation.position.rects) {
-			annotation.position.rects = annotation.position.rects.map(
-				rect => rect.map(value => parseFloat(value.toFixed(3)))
-			);
-		}
+
+		annotation.position = roundPositionValues(annotation.position);
 
 		let changedAnnotations = new Map([[annotation.id, annotation]]);
 		this._applyChanges(changedAnnotations);
@@ -169,11 +166,7 @@ class AnnotationManager {
 			}
 
 			annotation.dateModified = (new Date()).toISOString();
-			if (annotation.rects) {
-				annotation.position.rects = annotation.position.rects.map(
-					rect => rect.map(value => parseFloat(value.toFixed(3)))
-				);
-			}
+			annotation.position = roundPositionValues(annotation.position);
 			changedAnnotations.set(annotation.id, annotation);
 		}
 		this._applyChanges(changedAnnotations);
@@ -407,11 +400,12 @@ class AnnotationManager {
 		}
 
 		if (tags.length || colors.length || authors.length) {
-			annotations = annotations.filter(x => (
-				tags && x.tags.some(t => tags.includes(t.name))
-				|| colors && colors.includes(x.color)
-				|| authors && authors.includes(x.authorName)
-			));
+			annotations = annotations.filter(x => {
+				const matchesTags = tags.length === 0 || x.tags.some(t => tags.includes(t.name));
+				const matchesColors = colors.length === 0 || colors.includes(x.color);
+				const matchesAuthors = authors.length === 0 || authors.includes(x.authorName);
+				return matchesTags && matchesColors && matchesAuthors;
+			});
 		}
 
 		if (query) {
