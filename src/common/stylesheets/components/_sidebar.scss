@@ -13,8 +13,8 @@ body.sidebar-open {
 	width: var(--sidebar-width);
 	z-index: $z-index-sidebar;
 	left: calc(-1 * var(--sidebar-width));
-	border-right: var(--material-panedivider);
-	background-color: var(--material-sidepane);
+	border-right: var(--divider-width) solid var(--divider-color);
+	background-color: var(--background-primary);
 
 	body.sidebar-open & {
 		visibility: visible;
@@ -44,7 +44,7 @@ body.sidebar-open {
 	flex: 1 1 0;
 	overflow: auto;
 	-webkit-overflow-scrolling: touch;
-	background-color: var(--material-sidepane);
+	background-color: var(--background-primary);
 
 	.viewWrapper.hidden {
 		display: none;

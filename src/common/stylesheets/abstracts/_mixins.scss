@@ -240,7 +240,7 @@
 @mixin popup {
 	position: absolute;
 	z-index: $z-index-find-popup;
-	background: var(--material-toolbar);
+	background: var(--background-primary);
 	border-radius: 6px;
 	box-shadow: 0 0   3px  0 rgba(0, 0, 0, 0.55),
 				0 8px 40px 0 rgba(0, 0, 0, 0.25),

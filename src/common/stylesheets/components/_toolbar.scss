@@ -16,8 +16,8 @@
 	padding-inline: 8px 4px;
 	padding-block: 0;
 	min-width: 1px;
-	background: var(--material-toolbar);
-	border-bottom: var(--material-panedivider);
+	background: var(--background-primary);
+	border-bottom: 1px solid var(--background-modifier-border);
 
 	.start,
 	.center,
@@ -86,7 +86,7 @@
 }
 
 .toolbar-button {
-	color: var(--fill-secondary);
+	color: var(--icon-color);
 	width: 28px;
 	height: 28px;
 	display: flex;
@@ -95,11 +95,14 @@
 	border-radius: 5px;
 
 	&:hover {
-		background-color: var(--fill-quinary);
+		opacity: var(--icon-opacity-hover);
+        color: var(--icon-color-hover);
+        background-color: var(--background-modifier-hover);
 	}
 
 	&:active, &.active, &.active-pseudo-class-fix {
-		background-color: var(--fill-quarternary);
+		color: var(--icon-color-focused);
+		background-color: var(--background-modifier-hover);
 	}
 
 	&[disabled] {

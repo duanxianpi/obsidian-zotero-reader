@@ -31,6 +31,48 @@ body {
 	font-size: 13px;
 	// TODO: Remove --note-font-size, as it's probably not necessary to change font size for highlights and comments
 	--note-font-size: 13 / 16 * 1rem;
+	color: var(--text-normal);
+}
+
+body ::-webkit-scrollbar {
+  background-color: var(--scrollbar-bg);
+  width: var(--scrollbar-width);
+  height: var(--scrollbar-height);
+  -webkit-border-radius: var(--scrollbar-radius);
+  background-color: transparent;
+}
+
+body ::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+body ::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-bg);
+  -webkit-border-radius: var(--scrollbar-radius);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-width: var(--scrollbar-border-width);
+  min-height: 45px;
+}
+
+body ::-webkit-scrollbar-thumb:active {
+  -webkit-border-radius: var(--scrollbar-radius);
+}
+
+body ::-webkit-scrollbar-thumb:hover,
+body ::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-active-thumb-bg);
+}
+
+body ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  body {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb-bg) var(--scrollbar-bg);
+  }
 }
 
 :root {

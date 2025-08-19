@@ -6,6 +6,7 @@
 	top: 41px;
 	bottom: var(--bottom-placeholder-height);
 	display: flex;
+	background: var(--background-primary);
 
 	.primary-view, .secondary-view {
 		display: flex;

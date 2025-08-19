@@ -95,6 +95,23 @@ async function createReader(options = {}) {
 	const reader = new Reader(config);
 	reader.enableAddToNote(true);
 	await reader.initializedPromise;
+
+	// Sync the theme with obsidian
+
+	document.body.classList.add(`obsidian-theme-${options.theme}`);
+	document.documentElement.setAttribute("data-color-scheme", options.theme);
+
+	// Let the inner iframe sync theme with obsidian as well
+	reader._primaryView._iframeWindow.addObsidianStyleVars(
+		window.obsidianStyles
+	);
+	reader._primaryView._iframeWindow.document.body.classList.add(
+		`obsidian-theme-${options.theme}`
+	);
+	reader._primaryView._iframeWindow.document.documentElement.setAttribute(
+		"data-color-scheme",
+		options.theme
+	);
 	window._reader = reader;
 	console.debug(
 		`Reader instance with ID ${instanceId} initialized successfully`
@@ -215,12 +232,50 @@ try {
 		messenger,
 		// Methods the iframe window is exposing to the parent window.
 		methods: {
-			init(BLOB_URL_MAP) {
+			init(BLOB_URL_MAP, obsidianStyles) {
+				// Initialize the third party blob URLs
 				window.BLOB_URL_MAP = BLOB_URL_MAP;
+
+				// Sync Obsidian styles
+				window.obsidianStyles = obsidianStyles;
+				const newStylesheet = new CSSStyleSheet();
+
+				for (const [selector, styles] of Object.entries(
+					obsidianStyles
+				)) {
+					newStylesheet.insertRule(
+						`${selector} { ${Object.entries(styles)
+							.map(([key, value]) => `${key}: ${value};`)
+							.join(" ")} }`
+					);
+				}
+				document.adoptedStyleSheets.push(newStylesheet);
+
 				return true;
 			},
 			async createReader(options) {
 				createReader(options);
+			},
+			toggleTheme(originalTheme, newTheme) {
+				document.body.classList.remove(
+					`obsidian-theme-${originalTheme}`
+				);
+				document.body.classList.add(`obsidian-theme-${newTheme}`);
+				document.documentElement.setAttribute(
+					"data-color-scheme",
+					newTheme
+				);
+
+				window._reader._primaryView._iframeWindow.document.body.classList.remove(
+					`obsidian-theme-${originalTheme}`
+				);
+				window._reader._primaryView._iframeWindow.document.body.classList.add(
+					`obsidian-theme-${newTheme}`
+				);
+				window._reader._primaryView._iframeWindow.document.documentElement.setAttribute(
+					"data-color-scheme",
+					newTheme
+				);
 			},
 		},
 	});
