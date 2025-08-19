@@ -53,7 +53,7 @@
 	}
 
 	#numPages {
-		color: var(--fill-secondary);
+		color: var(--text-normal);
 		margin-left: 0;
 		display: flex;
 
@@ -117,15 +117,19 @@
 
 .toolbar-text-input {
 	padding: 0 7px;
-	background: var(--material-background);
+	background: var(--background-modifier-form-field);
 	border-radius: 5px;
-	border: var(--material-border-quinary);
+    border: var(--input-border-width) solid var(--background-modifier-border);
 	height: 28px;
 	width: 100%;
 
 	&:focus {
-		outline: none;
-		border-color: rgba(0, 0, 0, 0);
-		box-shadow: 0 0 0 var(--width-focus-border) var(--color-focus-search);
+		box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus);
+		border-color: var(--background-modifier-border-focus);
+    	transition: box-shadow 0.15s ease-in-out, border 0.15s ease-in-out;
+	}
+
+	&:active {
+		box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus)
 	}
 }

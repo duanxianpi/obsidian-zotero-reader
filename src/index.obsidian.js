@@ -97,20 +97,19 @@ async function createReader(options = {}) {
 	await reader.initializedPromise;
 
 	// Sync the theme with obsidian
-
-	document.body.classList.add(`obsidian-theme-${options.theme}`);
-	document.documentElement.setAttribute("data-color-scheme", options.theme);
+	document.body.classList.add(`obsidian-theme-${options.obsidianTheme}`);
+	document.documentElement.setAttribute("data-color-scheme", options.obsidianTheme);
 
 	// Let the inner iframe sync theme with obsidian as well
 	reader._primaryView._iframeWindow.addObsidianStyleVars(
 		window.obsidianStyles
 	);
 	reader._primaryView._iframeWindow.document.body.classList.add(
-		`obsidian-theme-${options.theme}`
+		`obsidian-theme-${options.obsidianTheme}`
 	);
 	reader._primaryView._iframeWindow.document.documentElement.setAttribute(
 		"data-color-scheme",
-		options.theme
+		options.obsidianTheme
 	);
 	window._reader = reader;
 	console.debug(
