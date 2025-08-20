@@ -1,289 +1,222 @@
-import Reader from "./common/reader";
 import { WindowMessenger, connect } from "penpal";
+import Reader from "./common/reader";
 
 /**
- * Create an empty reader instance (without container or data)
- * @returns {Object} Empty reader instance with initialize method
+ * -----------------------------------------------------------
+ * Adapter for the reader
+ * -----------------------------------------------------------
  */
-async function createReader(options = {}) {
-	// Generate unique instance ID
-	const instanceId = `reader_${Date.now()}_${Math.random()
-		.toString(36)
-		.substring(2, 9)}`;
 
-	const defaultOptions = {
-		readOnly: false,
-		// rtl: true,
-		annotations: [],
-		primaryViewState: {},
-		sidebarWidth: 240,
-		bottomPlaceholderHeight: null,
-		toolbarPlaceholderWidth: 0,
-		authorName: "Peter",
-		showAnnotations: true,
-		// platform: 'web',
-		// password: 'test',
-		onOpenContextMenu(params) {
-			reader.openContextMenu(params);
-		},
-		onAddToNote() {
-			alert("Add annotations to the current note");
-		},
-		onSaveAnnotations: async function (annotations) {
-			console.log("Save annotations", annotations);
-		},
-		onDeleteAnnotations: function (ids) {
-			console.log("Delete annotations", JSON.stringify(ids));
-		},
-		onChangeViewState: function (state, primary) {
-			console.log("Set state", state, primary);
-		},
-		onOpenTagsPopup(annotationID, left, top) {
-			alert(
-				`Opening Zotero tagbox popup for id: ${annotationID}, left: ${left}, top: ${top}`
-			);
-		},
-		onClosePopup(data) {
-			console.log("onClosePopup", data);
-		},
-		onOpenLink(url) {
-			alert("Navigating to an external link: " + url);
-		},
-		onToggleSidebar: (open) => {
-			console.log("Sidebar toggled", open);
-		},
-		onChangeSidebarWidth(width) {
-			console.log("Sidebar width changed", width);
-		},
-		onSetDataTransferAnnotations(dataTransfer, annotations, fromText) {
-			console.log(
-				"Set formatted dataTransfer annotations",
+class ReaderAdapter {
+	reader;
+	listeners = new Set();
+
+	on(cb) {
+		this.listeners.add(cb);
+		return () => this.listeners.delete(cb);
+	}
+	emit(e) {
+		this.listeners.forEach((l) => l(e));
+	}
+
+	async create(opts) {
+		const defaults = {
+			readOnly: false,
+			annotations: [],
+			primaryViewState: {},
+			sidebarWidth: 240,
+			toolbarPlaceholderWidth: 0,
+			showAnnotations: true,
+			onOpenContextMenu: (params) => {
+				this.reader.openContextMenu(params);
+			},
+			onAddToNote: () => {
+				this.emit({ type: "addToNote" });
+			},
+			onSaveAnnotations: (annotations) => {
+				this.emit({ type: "annotationsSaved", annotations });
+			},
+			onDeleteAnnotations: (ids) => {
+				this.emit({ type: "annotationsDeleted", ids });
+			},
+			onChangeViewState: (state, primary) => {
+				this.emit({ type: "viewStateChanged", state, primary });
+			},
+			onOpenTagsPopup: (annotationID, left, top) => {
+				this.emit({ type: "openTagsPopup", annotationID, left, top });
+			},
+			onClosePopup: (data) => {
+				this.emit({ type: "closePopup", data });
+			},
+			onOpenLink: (url) => {
+				this.emit({ type: "openLink", url });
+			},
+			onToggleSidebar: (open) => {
+				this.emit({ type: "sidebarToggled", open });
+			},
+			onChangeSidebarWidth: (width) => {
+				this.emit({ type: "sidebarWidthChanged", width });
+			},
+			onSetDataTransferAnnotations: (
 				dataTransfer,
 				annotations,
 				fromText
+			) => {
+				this.emit({
+					type: "setDataTransferAnnotations",
+					dataTransfer,
+					annotations,
+					fromText,
+				});
+			},
+			onConfirm: (title, text, confirmationButtonTitle) => {
+				this.emit({
+					type: "confirm",
+					title,
+					text,
+					confirmationButtonTitle,
+				});
+			},
+			onRotatePages: (pageIndexes, degrees) => {
+				this.emit({ type: "rotatePages", pageIndexes, degrees });
+			},
+			onDeletePages: (pageIndexes, degrees) => {
+				this.emit({ type: "deletePages", pageIndexes, degrees });
+			},
+			onToggleContextPane: () => {
+				this.emit({ type: "toggleContextPane" });
+			},
+			onTextSelectionAnnotationModeChange: (mode) => {
+				this.emit({ type: "textSelectionAnnotationModeChanged", mode });
+			},
+			onSaveCustomThemes: (customThemes) => {
+				this.emit({ type: "saveCustomThemes", customThemes });
+			},
+		};
+
+		// Build data argument from Source
+		const config = { ...defaults, ...opts };
+		if (
+			!config.data ||
+			!(config.data.buf || config.data.url) ||
+			!config.type
+		) {
+			throw new Error(
+				"Reader data is required (one of data.buf and data.url, and data.type must be provided in options)"
 			);
-		},
-		onConfirm(title, text, confirmationButtonTitle) {
-			return window.confirm(text);
-		},
-		onRotatePages(pageIndexes, degrees) {
-			console.log("Rotating pages", pageIndexes, degrees);
-		},
-		onDeletePages(pageIndexes, degrees) {
-			console.log("Deleting pages", pageIndexes, degrees);
-		},
-		onToggleContextPane() {
-			console.log("Toggle context pane");
-		},
-		onTextSelectionAnnotationModeChange(mode) {
-			console.log(`Change text selection annotation mode to '${mode}'`);
-		},
-		onSaveCustomThemes(customThemes) {
-			console.log("Save custom themes", customThemes);
-		},
-	};
+		}
 
-	const config = { ...defaultOptions, ...options };
+		console.log("Reader config:", config);
 
-	// Validate required options
-	if (!config.data || !config.data.buf || !config.type) {
-		throw new Error(
-			"Reader data is required (data.buf and data.type must be provided in options)"
-		);
+		this.reader = new Reader(config);
+		this.reader.enableAddToNote(true);
+		await this.reader.initializedPromise;
+
+		this.applyTheme(opts.obsidianTheme);
+		this.emit({ type: "ready" });
 	}
 
-	const reader = new Reader(config);
-	reader.enableAddToNote(true);
-	await reader.initializedPromise;
+	applyTheme(theme) {
+		document.body.classList.toggle("obsidian-theme-dark", theme === "dark");
+		document.body.classList.toggle(
+			"obsidian-theme-light",
+			theme === "light"
+		);
+		document.documentElement.setAttribute("data-color-scheme", theme);
 
-	// Sync the theme with obsidian
-	document.body.classList.add(`obsidian-theme-${options.obsidianTheme}`);
-	document.documentElement.setAttribute("data-color-scheme", options.obsidianTheme);
+		// Ask the Reader instance to update theme if API exists; otherwise set vars into its iframe safely.
+		const win = this.reader?._primaryView?._iframeWindow;
+		if (win?.document?.documentElement) {
+			win.document.documentElement.setAttribute(
+				"data-color-scheme",
+				theme
+			);
+			win.document.body.classList.toggle(
+				"obsidian-theme-dark",
+				theme === "dark"
+			);
+			win.document.body.classList.toggle(
+				"obsidian-theme-light",
+				theme === "light"
+			);
+		}
+	}
 
-	// Let the inner iframe sync theme with obsidian as well
-	reader._primaryView._iframeWindow.addObsidianStyleVars(
-		window.obsidianStyles
-	);
-	reader._primaryView._iframeWindow.document.body.classList.add(
-		`obsidian-theme-${options.obsidianTheme}`
-	);
-	reader._primaryView._iframeWindow.document.documentElement.setAttribute(
-		"data-color-scheme",
-		options.obsidianTheme
-	);
-	window._reader = reader;
-	console.debug(
-		`Reader instance with ID ${instanceId} initialized successfully`
-	);
+	adoptObsidianStyles(obsidianThemeVariables) {
+		try {
+			const sheet = new CSSStyleSheet();
+			for (const [sel, map] of Object.entries(obsidianThemeVariables)) {
+				const rules = Object.entries(map)
+					.map(([k, v]) => `${k}: ${v};`)
+					.join(" ");
+				sheet.insertRule(`${sel} { ${rules} }`);
+			}
+			document.adoptedStyleSheets.push(sheet);
+		} catch {
+			// Fallback for browsers without adoptedStyleSheets
+			const style = document.createElement("style");
+			style.textContent = Object.entries(obsidianThemeVariables)
+				.map(
+					([sel, map]) =>
+						`${sel}{${Object.entries(map)
+							.map(([k, v]) => `${k}:${v};`)
+							.join("")}}`
+				)
+				.join("");
+			document.head.appendChild(style);
+		}
+	}
 
-	return reader;
+	async dispose() {
+		try {
+			await this.reader?.destroy?.();
+		} catch {}
+		this.reader = undefined;
+	}
 }
 
-// // Initialize Penpal connection with parent window
-// let parentConnection = null;
-// let readerInstance = null;
+/**
+ * -----------------------------------------------------------
+ * Penpal bridge with the obsidian
+ * -----------------------------------------------------------
+ */
 
-// async function initializePenpalConnection() {
-// 	try {
-// 		parentConnection = Penpal.connectToParent({
-// 			// Methods exposed to the parent (view.ts)
-// 			methods: {
-// 				// Initialize reader with data from parent
-// 				async initializeReader(data, type, filename) {
-// 					console.log('Initializing reader with data from parent', { type, filename });
+const adapter = new ReaderAdapter();
 
-// 					const options = {
-// 						data: { buf: data, type },
-// 						type,
-// 						filename,
-// 						onSaveAnnotations: async function (annotations) {
-// 							console.log("Save annotations", annotations);
-// 							// Send annotations to parent
-// 							if (parentConnection) {
-// 								await parentConnection.call('onAnnotationsSaved', annotations);
-// 							}
-// 						},
-// 						onDeleteAnnotations: function (ids) {
-// 							console.log("Delete annotations", JSON.stringify(ids));
-// 							// Send deleted annotation IDs to parent
-// 							if (parentConnection) {
-// 								parentConnection.call('onAnnotationsDeleted', ids);
-// 							}
-// 						},
-// 						onChangeViewState: function (state, primary) {
-// 							console.log("Set state", state, primary);
-// 							// Send view state changes to parent
-// 							if (parentConnection) {
-// 								parentConnection.call('onViewStateChanged', state, primary);
-// 							}
-// 						},
-// 						onAddToNote() {
-// 							// Request parent to add annotations to note
-// 							if (parentConnection) {
-// 								parentConnection.call('onAddToNote');
-// 							}
-// 						},
-// 					};
-
-// 					readerInstance = await createReader(options);
-// 					return { success: true, instanceId };
-// 				},
-
-// 				// Get current reader state
-// 				getReaderState() {
-// 					if (readerInstance) {
-// 						return {
-// 							annotations: readerInstance.getAnnotations ? readerInstance.getAnnotations() : [],
-// 							viewState: readerInstance.getViewState ? readerInstance.getViewState() : null,
-// 						};
-// 					}
-// 					return null;
-// 				},
-
-// 				// Update annotations from parent
-// 				updateAnnotations(annotations) {
-// 					if (readerInstance && readerInstance.setAnnotations) {
-// 						readerInstance.setAnnotations(annotations);
-// 						return { success: true };
-// 					}
-// 					return { success: false, error: 'Reader not initialized' };
-// 				},
-
-// 				// Navigate to specific page/location
-// 				navigateTo(location) {
-// 					if (readerInstance && readerInstance.navigate) {
-// 						readerInstance.navigate(location);
-// 						return { success: true };
-// 					}
-// 					return { success: false, error: 'Reader not initialized' };
-// 				},
-
-// 				// Get reader capabilities
-// 				getCapabilities() {
-// 					return {
-// 						canAnnotate: true,
-// 						canNavigate: true,
-// 						canExportAnnotations: true,
-// 						supportedFormats: ['pdf', 'epub']
-// 					};
-// 				}
-// 			}
-// 		});
-
-// 		console.log('Penpal connection established with parent');
-
-// 		// Notify parent that reader is ready
-// 		await parentConnection.call('onReaderReady');
-
-// 	} catch (error) {
-// 		console.error('Failed to establish Penpal connection:', error);
-// 	}
-// }
-
-try {
+(async function bootstrap() {
 	const messenger = new WindowMessenger({
 		remoteWindow: window.parent,
-		// Defaults to the current origin.
 		allowedOrigins: ["app://obsidian.md"],
 	});
 
 	const connection = connect({
 		messenger,
-		// Methods the iframe window is exposing to the parent window.
 		methods: {
-			init(BLOB_URL_MAP, obsidianStyles) {
-				// Initialize the third party blob URLs
-				window.BLOB_URL_MAP = BLOB_URL_MAP;
-
-				// Sync Obsidian styles
-				window.obsidianStyles = obsidianStyles;
-				const newStylesheet = new CSSStyleSheet();
-
-				for (const [selector, styles] of Object.entries(
-					obsidianStyles
-				)) {
-					newStylesheet.insertRule(
-						`${selector} { ${Object.entries(styles)
-							.map(([key, value]) => `${key}: ${value};`)
-							.join(" ")} }`
-					);
-				}
-				document.adoptedStyleSheets.push(newStylesheet);
-
-				return true;
+			async init(payload) {
+				window.BLOB_URL_MAP = payload.blobUrlMap;
+				window.OBSIDIAN_THEME_VARIABLES =
+					payload.obsidianThemeVariables;
+				adapter.adoptObsidianStyles(payload.obsidianThemeVariables);
+				adapter.applyTheme(payload.theme);
+				return { ok: true };
 			},
-			async createReader(options) {
-				createReader(options);
+			async createReader(opts) {
+				console.log("Creating reader with opts:", opts);
+				await adapter.create(opts);
+				return { ok: true };
 			},
-			toggleTheme(originalTheme, newTheme) {
-				document.body.classList.remove(
-					`obsidian-theme-${originalTheme}`
-				);
-				document.body.classList.add(`obsidian-theme-${newTheme}`);
-				document.documentElement.setAttribute(
-					"data-color-scheme",
-					newTheme
-				);
-
-				window._reader._primaryView._iframeWindow.document.body.classList.remove(
-					`obsidian-theme-${originalTheme}`
-				);
-				window._reader._primaryView._iframeWindow.document.body.classList.add(
-					`obsidian-theme-${newTheme}`
-				);
-				window._reader._primaryView._iframeWindow.document.documentElement.setAttribute(
-					"data-color-scheme",
-					newTheme
-				);
+			async setTheme(theme) {
+				adapter.applyTheme(theme);
+				return { ok: true };
+			},
+			async dispose() {
+				await adapter.dispose();
+				return { ok: true };
 			},
 		},
 	});
 
-	console.log("Penpal connection established with parent window");
-} catch (error) {
-	console.error("Failed to establish Penpal connection:", error);
-}
-// const remote = await connection.promise;
-// // Calling a remote method will always return a promise.
-// const additionResult = await remote.add(2, 6);
-// console.log(additionResult); // 8
+	// Event pipe child → parent
+	const parent = await connection.promise;
+	adapter.on((evt) => parent.handleEvent(evt));
+})();

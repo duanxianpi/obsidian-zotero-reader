@@ -452,7 +452,7 @@ body, #viewerContainer {
 :root[data-color-scheme=dark] body,
 :root[data-color-scheme=dark] body #viewerContainer {
 	color-scheme: dark;
-	background-color: #272727; /* --color-toolbar */
+	background-color: var(--background-primary);; /* --color-toolbar */
 }
 
 :root[data-color-scheme=dark] .pdfViewer .page {

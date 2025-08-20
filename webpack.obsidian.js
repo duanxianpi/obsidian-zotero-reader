@@ -28,7 +28,6 @@ module.exports = (_env, argv) => {
 			library: {
 				name: "reader",
 				type: "umd",
-				umdNamedDefine: true,
 			},
 			chunkFilename: "[name].reader.js",
 		},
