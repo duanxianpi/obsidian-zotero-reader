@@ -275,11 +275,6 @@ class Reader {
 
 		this._primaryView = this._createView(true, options.location);
 
-		// Resolve the Reader's initializedPromise after the primary view is initialized
-		this._primaryView.initializedPromise.then(() => {
-			this._resolveInitializedPromise();
-		});
-
 		if (selectAnnotationID) {
 			(async () => {
 				await this._primaryView.initializedPromise;
@@ -495,7 +490,7 @@ class Reader {
 				document.documentElement.dataset.colorScheme = this._state.colorScheme;
 			}
 			else {
-				delete document.documentElement.dataset.colorScheme;
+				// delete document.documentElement.dataset.colorScheme;
 			}
 			if (!init) {
 				this._primaryView?.setColorScheme(this._state.colorScheme);
@@ -1109,7 +1104,10 @@ class Reader {
 		}
 
 		if (primary) {
-			view.initializedPromise.then(() => view.focus());
+			view.initializedPromise.then(() => {
+				this._resolveInitializedPromise();
+				view.focus();
+			});
 		}
 
 		return view;

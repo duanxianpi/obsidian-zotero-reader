@@ -4,7 +4,7 @@
 	padding: 4px;
 	border-radius: 5px;
 	border: 0;
-	color: var(--fill-primary);
+	color: var(--icon-color-focused);
 
 	.btn {
 		display: flex;
@@ -12,13 +12,16 @@
 	}
 
 	&:not(.expanded) {
-		color: var(--fill-secondary);
+		color: var(--icon-color);
 		&:hover {
-			background-color: var(--fill-quinary);
+			opacity: var(--icon-opacity-hover);
+			color: var(--icon-color-hover);
+			background-color: var(--background-modifier-hover);
 		}
 
-		&:active {
-			background-color: var(--fill-quarternary);
+		&:active, &.active, &.active-pseudo-class-fix {
+			color: var(--icon-color-focused);
+			background-color: var(--background-modifier-hover);
 		}
 	}
 
@@ -41,8 +44,12 @@
 	}
 
 	&:focus-within {
-		outline: none;
-		border-color: rgba(0,0,0,0);
-		box-shadow: 0 0 0 var(--width-focus-border) var(--color-focus-search);
+		box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus);
+		border-color: var(--background-modifier-border-focus);
+    	transition: box-shadow 0.15s ease-in-out, border 0.15s ease-in-out;
+	}
+
+	&:active {
+		box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus);
 	}
 }

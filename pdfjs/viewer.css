@@ -8,47 +8,6 @@ body {
 	overflow: hidden;
 }
 
-body ::-webkit-scrollbar {
-  background-color: var(--scrollbar-bg);
-  width: var(--scrollbar-width);
-  height: var(--scrollbar-height);
-  -webkit-border-radius: var(--scrollbar-radius);
-  background-color: transparent;
-}
-
-body ::-webkit-scrollbar-track {
-  background-color: transparent;
-}
-
-body ::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb-bg);
-  -webkit-border-radius: var(--scrollbar-radius);
-  background-clip: padding-box;
-  border: 2px solid transparent;
-  border-width: var(--scrollbar-border-width);
-  min-height: 45px;
-}
-
-body ::-webkit-scrollbar-thumb:active {
-  -webkit-border-radius: var(--scrollbar-radius);
-}
-
-body ::-webkit-scrollbar-thumb:hover,
-body ::-webkit-scrollbar-thumb:active {
-  background-color: var(--scrollbar-active-thumb-bg);
-}
-
-body ::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-@supports not selector(::-webkit-scrollbar) {
-  body {
-    scrollbar-width: thin;
-    scrollbar-color: var(--scrollbar-thumb-bg) var(--scrollbar-bg);
-  }
-}
-
 @media screen and (forced-colors: active) {
 	:root {
 		--page-border: 1px solid CanvasText;

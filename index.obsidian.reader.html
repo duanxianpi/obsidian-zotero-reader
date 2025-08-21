@@ -13,18 +13,162 @@
 		<meta charset="UTF-8" />
 		<title>Zotero Reader</title>
 
+		<script>
+			// Set up BLOB_URL_MAP from parent
+			(() => {
+				window.BLOB_URL_MAP = window.parent.BLOB_URL_MAP || {};
+			})();
+		</script>
+
+		<script>
+			// Set up the Obsidian's theme vars
+			(() => {
+				const extractObsidianStylesVars = () => {
+					const extractCSSVariables = (selector) => {
+						const variables = {};
+
+						Array.from(window.parent.document.styleSheets)
+							.filter(
+								(sheet) =>
+									sheet.href === null ||
+									sheet.href.startsWith(
+										window.location.origin
+									)
+							)
+							.forEach((sheet) => {
+								try {
+									Array.from(sheet.cssRules).forEach(
+										(rule) => {
+											const styleRule = rule;
+											if (
+												styleRule.selectorText &&
+												styleRule.selectorText
+													.split(",")
+													.map((s) => s.trim())
+													.includes(selector) &&
+												styleRule.style
+											) {
+												Array.from(
+													styleRule.style
+												).forEach((name) => {
+													if (name.startsWith("--")) {
+														variables[name] =
+															styleRule.style.getPropertyValue(
+																name
+															);
+													}
+												});
+											}
+										}
+									);
+								} catch (e) {
+									console.warn(
+										"Could not access stylesheet rules:",
+										e
+									);
+								}
+							});
+
+						return variables;
+					};
+					const bodyVariables = extractCSSVariables("body");
+					const themeLightVariables =
+						extractCSSVariables(".theme-light");
+					const themeDarkVariables =
+						extractCSSVariables(".theme-dark");
+
+					return {
+						":root": bodyVariables,
+						"html.obsidian-theme-light": themeLightVariables,
+						"html.obsidian-theme-dark": themeDarkVariables,
+					};
+				};
+				// Extract Obsidian theme variables and apply them to the document
+				window.OBSIDIAN_THEME_VARIABLES = extractObsidianStylesVars();
+				const varsStyle = document.createElement("style");
+				varsStyle.textContent = Object.entries(
+					window.OBSIDIAN_THEME_VARIABLES
+				)
+					.map(
+						([sel, map]) =>
+							`${sel}{${Object.entries(map)
+								.map(([k, v]) => `${k}:${v};`)
+								.join("")}}`
+					)
+					.join("");
+				document.head.prepend(varsStyle);
+
+				const theme = getComputedStyle(
+					window.parent.document.body
+				).colorScheme;
+
+				document.documentElement.setAttribute(
+					"data-color-scheme",
+					theme
+				);
+				document.documentElement.classList.toggle(
+					"obsidian-theme-dark",
+					theme === "dark"
+				);
+				document.documentElement.classList.toggle(
+					"obsidian-theme-light",
+					theme === "light"
+				);
+			})();
+		</script>
+		<style>
+			::-webkit-scrollbar {
+				background-color: var(--scrollbar-bg);
+				width: var(--scrollbar-width);
+				height: var(--scrollbar-height);
+				-webkit-border-radius: var(--scrollbar-radius);
+				background-color: transparent;
+			}
+
+			::-webkit-scrollbar-track {
+				background-color: transparent;
+			}
+
+			::-webkit-scrollbar-thumb {
+				background-color: var(--scrollbar-thumb-bg);
+				-webkit-border-radius: var(--scrollbar-radius);
+				background-clip: padding-box;
+				border: 2px solid transparent;
+				border-width: var(--scrollbar-border-width);
+				min-height: 45px;
+			}
+
+			::-webkit-scrollbar-thumb:active {
+				-webkit-border-radius: var(--scrollbar-radius);
+			}
+
+			::-webkit-scrollbar-thumb:hover,
+			::-webkit-scrollbar-thumb:active {
+				background-color: var(--scrollbar-active-thumb-bg);
+			}
+
+			::-webkit-scrollbar-corner {
+				background: transparent;
+			}
+			@supports not selector(::-webkit-scrollbar) {
+				:root {
+					scrollbar-width: thin;
+					scrollbar-color: var(--scrollbar-thumb-bg)
+						var(--scrollbar-bg);
+				}
+			}
+		</style>
+
 		<% for (const js of htmlWebpackPlugin.files.js) { %>
 		<script defer="defer" src="<%= js %>" type="module"></script>
-		<% } %>
-		
-		<% for (const css of htmlWebpackPlugin.files.css) { %>
+		<% } %> <% for (const css of htmlWebpackPlugin.files.css) { %>
 		<link rel="stylesheet" href="<%= css %>" />
 		<% } %>
 	</head>
 	<body class="sidebar-open">
 		<div id="reader-ui"></div>
 		<div id="split-view">
-			<div id="primary-view" class="primary-view"></div>
+			<div id="primary-view" class="primary-view" style="opacity: 0;"></div>
 			<div id="secondary-view" class="secondary-view"></div>
 		</div>
 		<div id="printContainer"></div>

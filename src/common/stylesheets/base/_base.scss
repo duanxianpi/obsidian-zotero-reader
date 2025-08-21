@@ -24,6 +24,7 @@
 
 :root, body {
 	overscroll-behavior: none;
+	background: var(--background-primary);
 }
 
 body {
@@ -155,8 +156,21 @@ select {
 	outline: none;
 }
 
-input {
+input:not([id="searchInput"]) {
 	color: var(--text-normal);
+	background: var(--background-modifier-form-field);
+	border-radius: 5px;
+    border: var(--input-border-width) solid var(--background-modifier-border);
+
+	&:focus {
+		box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus);
+		border-color: var(--background-modifier-border-focus);
+    	transition: box-shadow 0.15s ease-in-out, border 0.15s ease-in-out;
+	}
+
+	&:active {
+		box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus)
+	}
 }
 
 input[type="range"] {

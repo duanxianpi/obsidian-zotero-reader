@@ -84,13 +84,21 @@
 
 	input[type=text] {
 		padding: 0 7px;
-		background: var(--material-background);
-		border-radius: 5px;
-		border: var(--material-border-quinary);
 		height: 22px;
 
-		&:disabled {
-			color: var(--fill-tertiary);
+		color: var(--text-normal);
+		background: var(--background-modifier-form-field);
+		border-radius: 5px;
+		border: var(--input-border-width) solid var(--background-modifier-border);
+
+		&:focus {
+			box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus);
+			border-color: var(--background-modifier-border-focus);
+			transition: box-shadow 0.15s ease-in-out, border 0.15s ease-in-out;
+		}
+
+		&:active {
+			box-shadow: 0 0 0 var(--input-border-width-focus) var(--background-modifier-border-focus)
 		}
 	}
 
