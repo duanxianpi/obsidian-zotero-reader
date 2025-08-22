@@ -209,9 +209,6 @@ export default class ReaderAdapter {
 	}
 
 	async dispose() {
-		try {
-			await this.reader?.destroy?.();
-		} catch {}
 		this.reader = undefined;
 	}
 }
