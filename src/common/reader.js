@@ -175,7 +175,7 @@ class Reader {
 			pageLabels: [],
 			sidebarOpen: options.sidebarOpen !== undefined ? options.sidebarOpen : true,
 			sidebarWidth: options.sidebarWidth !== undefined ? options.sidebarWidth : 240,
-			sidebarView: 'annotations',
+			sidebarView: 'thumbnails',
 			contextPaneOpen: options.contextPaneOpen !== undefined ? options.contextPaneOpen : false,
 			bottomPlaceholderHeight: options.bottomPlaceholderHeight || null,
 			toolbarPlaceholderWidth: options.toolbarPlaceholderWidth || 0,
@@ -490,7 +490,7 @@ class Reader {
 				document.documentElement.dataset.colorScheme = this._state.colorScheme;
 			}
 			else {
-				// delete document.documentElement.dataset.colorScheme;
+				delete document.documentElement.dataset.colorScheme;
 			}
 			if (!init) {
 				this._primaryView?.setColorScheme(this._state.colorScheme);

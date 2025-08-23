@@ -1,5 +1,6 @@
 import { WindowMessenger, connect } from "penpal";
 import ReaderAdapter from "./index.obsidian.reader.js";
+
 /**
  * -----------------------------------------------------------
  * Penpal bridge with the obsidian
@@ -21,8 +22,8 @@ const adapter = new ReaderAdapter();
 				await adapter.createReader(opts);
 				return { ok: true };
 			},
-			async setTheme(theme) {
-				adapter.applyTheme(theme);
+			async setColorScheme(colorScheme) {
+				adapter.applyColorScheme(colorScheme);
 				return { ok: true };
 			},
 			async dispose() {
@@ -35,4 +36,5 @@ const adapter = new ReaderAdapter();
 	// Event pipe child → parent
 	const parent = await connection.promise;
 	adapter.on((evt) => parent.handleEvent(evt));
+	window.testfunc = parent.createEditor;
 })();

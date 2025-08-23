@@ -134,8 +134,8 @@ class PDFView {
 		// Create a MediaQueryList object
 		let darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
-		// Initial check
-		this._preferedColorTheme = darkModeMediaQuery.matches ? 'dark' : 'light';
+		// Don't need to check system's preferred color scheme, it will be brought from obsidian
+		// this._preferedColorTheme = darkModeMediaQuery.matches ? 'dark' : 'light';
 
 		// Listen for changes
 		darkModeMediaQuery.addEventListener('change', event => {
@@ -496,17 +496,17 @@ class PDFView {
 
 			if (this._colorScheme === 'light' && this._lightTheme) {
 				this._iframeWindow.theme = this._lightTheme;
-				root.style.setProperty('--background-color', this._lightTheme.background);
+				root.style.setProperty('--reader-theme-background-color', this._lightTheme.background);
 				this._themeColorScheme = getModeBasedOnColors(this._lightTheme.background, this._lightTheme.foreground);
 			}
 			else if (this._colorScheme === 'dark' && this._darkTheme) {
 				this._iframeWindow.theme = this._darkTheme;
-				root.style.setProperty('--background-color', this._darkTheme.background);
+				root.style.setProperty('--reader-theme-background-color', this._darkTheme.background);
 				this._themeColorScheme = getModeBasedOnColors(this._darkTheme.background, this._darkTheme.foreground);
 			}
 			else {
 				this._iframeWindow.theme = null;
-				root.style.setProperty('--background-color', '#FFFFFF');
+				root.style.setProperty('--reader-theme-background-color', '#FFFFFF');
 				this._themeColorScheme = 'light';
 			}
 

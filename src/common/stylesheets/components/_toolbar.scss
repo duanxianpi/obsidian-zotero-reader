@@ -96,8 +96,8 @@
 
 	&:hover {
 		opacity: var(--icon-opacity-hover);
-        color: var(--icon-color-hover);
-        background-color: var(--background-modifier-hover);
+		color: var(--icon-color-hover);
+		background-color: var(--background-modifier-hover);
 	}
 
 	&:active, &.active, &.active-pseudo-class-fix {

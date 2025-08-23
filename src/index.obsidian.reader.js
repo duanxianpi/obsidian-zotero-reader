@@ -24,8 +24,12 @@ export default class ReaderAdapter {
 			annotations: [],
 			primaryViewState: {},
 			sidebarWidth: 240,
+			sidebarOpen: false,
 			toolbarPlaceholderWidth: 0,
 			showAnnotations: true,
+			customThemes: [this.generateObsidianTheme()],
+			lightTheme: "obsidian",
+			darkTheme: "obsidian",
 			onOpenContextMenu: (params) => {
 				this.reader.openContextMenu(params);
 			},
@@ -33,6 +37,7 @@ export default class ReaderAdapter {
 				this.emit({ type: "addToNote" });
 			},
 			onSaveAnnotations: (annotations) => {
+				console.log("Save annotations", annotations);
 				this.emit({ type: "annotationsSaved", annotations });
 			},
 			onDeleteAnnotations: (ids) => {
@@ -90,11 +95,13 @@ export default class ReaderAdapter {
 			},
 			onSaveCustomThemes: (customThemes) => {
 				this.emit({ type: "saveCustomThemes", customThemes });
+				console.log("Custom themes saved:", customThemes);
 			},
 		};
 
 		// Build data argument from Source
 		const config = { ...defaults, ...opts };
+
 		if (
 			!config.data ||
 			!(config.data.buf || config.data.url) ||
@@ -107,46 +114,52 @@ export default class ReaderAdapter {
 
 		this.reader = new Reader(config);
 		this.reader.enableAddToNote(true);
-		
+
 		await this.reader.initializedPromise;
+		window._reader = this.reader;
 
 		// adopt obsidian styles
 		this.adoptObsidianStyles(
 			window.OBSIDIAN_THEME_VARIABLES,
 			this.reader._primaryView._iframeWindow.document
 		);
-		this.applyTheme(opts.obsidianTheme);
+		this.applyColorScheme(opts.colorScheme);
 		this.reader._primaryViewContainer.style.opacity = "1";
 
 		this.emit({ type: "ready" });
 	}
 
-	applyTheme(theme) {
-		console.log("Applying theme:", theme);
+	applyColorScheme(colorScheme) {
 		document.documentElement.classList.toggle(
 			"obsidian-theme-dark",
-			theme === "dark"
+			colorScheme === "dark"
 		);
 		document.documentElement.classList.toggle(
 			"obsidian-theme-light",
-			theme === "light"
+			colorScheme === "light"
 		);
-		document.documentElement.setAttribute("data-color-scheme", theme);
+
+		const newCustomThemes = this.reader._state.customThemes?.map(
+			(theme) => {
+				if (theme.id === "obsidian") {
+					return this.generateObsidianTheme();
+				}
+				return theme;
+			}
+		);
+
+		this.reader.setCustomThemes(newCustomThemes);
 
 		// Ask the Reader instance to update theme if API exists; otherwise set vars into its iframe safely.
 		const win = this.reader?._primaryView?._iframeWindow;
 		if (win?.document?.documentElement) {
-			win.document.documentElement.setAttribute(
-				"data-color-scheme",
-				theme
-			);
 			win.document.documentElement.classList.toggle(
 				"obsidian-theme-dark",
-				theme === "dark"
+				colorScheme === "dark"
 			);
 			win.document.documentElement.classList.toggle(
 				"obsidian-theme-light",
-				theme === "light"
+				colorScheme === "light"
 			);
 		}
 	}
@@ -206,6 +219,21 @@ export default class ReaderAdapter {
 
 		document.head.prepend(scrollbarStyle);
 		document.head.prepend(varsStyle);
+	}
+
+	generateObsidianTheme() {
+		const computedStyle = getComputedStyle(document.documentElement);
+		const background = computedStyle.getPropertyValue(
+			"--background-primary"
+		);
+		const foreground = computedStyle.getPropertyValue("--text-normal");
+
+		return {
+			background: background,
+			foreground: foreground,
+			id: "obsidian",
+			label: "Obsidian",
+		};
 	}
 
 	async dispose() {

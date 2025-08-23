@@ -955,8 +955,8 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 				--content-scale: ${this.scale};
 				--content-font-family: ${this._iframeDocument.documentElement.style.getPropertyValue('--content-font-family')};
 				--selection-color: ${this._iframeDocument.documentElement.style.getPropertyValue('--selection-color')};
-				--background-color: ${this._iframeDocument.documentElement.style.getPropertyValue('--background-color')};
-				--text-color: ${this._iframeDocument.documentElement.style.getPropertyValue('--text-color')};
+				--reader-theme-background-color: ${this._iframeDocument.documentElement.style.getPropertyValue('--reader-theme-background-color')};
+				--reader-theme-text-color: ${this._iframeDocument.documentElement.style.getPropertyValue('--reader-theme-text-color')};
 			}
 		`;
 

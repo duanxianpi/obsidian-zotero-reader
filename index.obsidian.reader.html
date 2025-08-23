@@ -101,11 +101,7 @@
 				const theme = getComputedStyle(
 					window.parent.document.body
 				).colorScheme;
-
-				document.documentElement.setAttribute(
-					"data-color-scheme",
-					theme
-				);
+				
 				document.documentElement.classList.toggle(
 					"obsidian-theme-dark",
 					theme === "dark"

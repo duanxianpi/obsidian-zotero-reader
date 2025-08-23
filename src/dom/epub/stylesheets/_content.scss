@@ -53,8 +53,8 @@
 
 :root {
 	font-size: calc(var(--content-scale) * 13pt) !important;
-	background-color: var(--background-color) !important;
-	color: var(--text-color) !important;
+	background-color: var(--reader-theme-background-color) !important;
+	color: var(--reader-theme-text-color) !important;
 
 	&:not(.hyphenate) * {
 		hyphens: none !important;
