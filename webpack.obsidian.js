@@ -91,11 +91,16 @@ module.exports = (_env, argv) => {
 				},
 				{ test: /\.ftl$/, type: "asset/source" },
 				{
-					test: /tex\.js$/, // Inline MathJax TeX font URLs
+					test: /(tex|FontData)\.js$/, // Inline MathJax TeX font URLs
 					include: [
 						path.dirname(
 							require.resolve(
 								"mathjax-full/js/output/chtml/fonts/tex.js"
+							)
+						),
+						path.dirname(
+							require.resolve(
+								"mathjax-full/js/output/chtml/FontData.js"
 							)
 						),
 					],

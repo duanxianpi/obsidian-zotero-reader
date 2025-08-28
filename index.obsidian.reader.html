@@ -12,106 +12,47 @@
 	<head>
 		<meta charset="UTF-8" />
 		<title>Zotero Reader</title>
+		<base href="/" />
 
+		<!-- Script to set up the environment from obsidian -->
 		<script>
-			// Set up BLOB_URL_MAP from parent
 			(() => {
+				// Set up BLOB_URL_MAP from parent
 				window.BLOB_URL_MAP = window.parent.BLOB_URL_MAP || {};
-			})();
-		</script>
 
-		<script>
-			// Set up the Obsidian's theme vars
-			(() => {
-				const extractObsidianStylesVars = () => {
-					const extractCSSVariables = (selector) => {
-						const variables = {};
+				// Set base URL
+				document
+					.querySelector("base")
+					.setAttribute("href", window.parent.location.origin + "/");
 
-						Array.from(window.parent.document.styleSheets)
-							.filter(
-								(sheet) =>
-									sheet.href === null ||
-									sheet.href.startsWith(
-										window.location.origin
-									)
-							)
-							.forEach((sheet) => {
-								try {
-									Array.from(sheet.cssRules).forEach(
-										(rule) => {
-											const styleRule = rule;
-											if (
-												styleRule.selectorText &&
-												styleRule.selectorText
-													.split(",")
-													.map((s) => s.trim())
-													.includes(selector) &&
-												styleRule.style
-											) {
-												Array.from(
-													styleRule.style
-												).forEach((name) => {
-													if (name.startsWith("--")) {
-														variables[name] =
-															styleRule.style.getPropertyValue(
-																name
-															);
-													}
-												});
-											}
-										}
-									);
-								} catch (e) {
-									console.warn(
-										"Could not access stylesheet rules:",
-										e
-									);
-								}
-							});
-
-						return variables;
-					};
-					const bodyVariables = extractCSSVariables("body");
-					const themeLightVariables =
-						extractCSSVariables(".theme-light");
-					const themeDarkVariables =
-						extractCSSVariables(".theme-dark");
-
-					return {
-						":root": bodyVariables,
-						"html.obsidian-theme-light": themeLightVariables,
-						"html.obsidian-theme-dark": themeDarkVariables,
-					};
+				// Set up MathJax
+				window.MathJax = {
+					chtml: {
+						adaptiveCSS: false,
+						fontURL: window.parent.MathJax.config.chtml.fontURL,
+					},
+					loader: {
+						paths: window.parent.MathJax.config.loader.paths,
+					},
+					startup: {
+						typeset: true,
+					},
 				};
-				// Extract Obsidian theme variables and apply them to the document
-				window.OBSIDIAN_THEME_VARIABLES = extractObsidianStylesVars();
-				const varsStyle = document.createElement("style");
-				varsStyle.textContent = Object.entries(
-					window.OBSIDIAN_THEME_VARIABLES
-				)
-					.map(
-						([sel, map]) =>
-							`${sel}{${Object.entries(map)
-								.map(([k, v]) => `${k}:${v};`)
-								.join("")}}`
-					)
-					.join("");
-				document.head.prepend(varsStyle);
-
-				const theme = getComputedStyle(
-					window.parent.document.body
-				).colorScheme;
-				
-				document.documentElement.classList.toggle(
-					"obsidian-theme-dark",
-					theme === "dark"
-				);
-				document.documentElement.classList.toggle(
-					"obsidian-theme-light",
-					theme === "light"
-				);
 			})();
 		</script>
+
+		<!-- Loading MathJax -->
+		<script src="/lib/mathjax/tex-chtml-full.js"></script>
+
+		<!-- Loading Enhance.js -->
+		<script src="/enhance.js" type="text/javascript" defer></script>
+		
+		<!-- Webpack will inject the reader.js here -->
+		<% for (const js of htmlWebpackPlugin.files.js) { %>
+		<script src="<%= js %>" type="module" defer></script>
+		<% } %>
+
+		<!-- Styles for scrollbar -->
 		<style>
 			::-webkit-scrollbar {
 				background-color: var(--scrollbar-bg);
@@ -155,16 +96,19 @@
 			}
 		</style>
 
-		<% for (const js of htmlWebpackPlugin.files.js) { %>
-		<script defer="defer" src="<%= js %>" type="module"></script>
-		<% } %> <% for (const css of htmlWebpackPlugin.files.css) { %>
+		<!-- Webpack will inject the reader.css here -->
+		<% for (const css of htmlWebpackPlugin.files.css) { %>
 		<link rel="stylesheet" href="<%= css %>" />
 		<% } %>
 	</head>
 	<body class="sidebar-open">
 		<div id="reader-ui"></div>
 		<div id="split-view">
-			<div id="primary-view" class="primary-view" style="opacity: 0;"></div>
+			<div
+				id="primary-view"
+				class="primary-view"
+				style="opacity: 0"
+			></div>
 			<div id="secondary-view" class="secondary-view"></div>
 		</div>
 		<div id="printContainer"></div>

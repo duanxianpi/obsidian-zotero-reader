@@ -222,6 +222,39 @@ export default class ReaderAdapter {
 	}
 
 	generateObsidianTheme() {
+		const expandShortHex = (hex) => {
+			// Convert #abc to #aabbcc
+			return hex.replace(
+				/^#([a-f\d])([a-f\d])([a-f\d])$/i,
+				(m, r, g, b) => "#" + r + r + g + g + b + b
+			);
+		};
+
+		const convertAnyColorToHex = (color) => {
+			// Already hex
+			if (color.startsWith("#")) {
+				return color.length === 4 ? expandShortHex(color) : color;
+			}
+
+			// Named colors, rgb(), rgba(), hsl(), etc.
+			const canvas = document.createElement("canvas");
+			canvas.width = canvas.height = 1;
+			const ctx = canvas.getContext("2d");
+
+			ctx.fillStyle = color;
+			ctx.fillRect(0, 0, 1, 1);
+
+			const imageData = ctx.getImageData(0, 0, 1, 1).data;
+			const r = imageData[0];
+			const g = imageData[1];
+			const b = imageData[2];
+
+			return (
+				"#" +
+				((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)
+			);
+		};
+
 		const computedStyle = getComputedStyle(document.documentElement);
 		const background = computedStyle.getPropertyValue(
 			"--background-primary"
@@ -229,8 +262,8 @@ export default class ReaderAdapter {
 		const foreground = computedStyle.getPropertyValue("--text-normal");
 
 		return {
-			background: background,
-			foreground: foreground,
+			background: convertAnyColorToHex(background),
+			foreground: convertAnyColorToHex(foreground),
 			id: "obsidian",
 			label: "Obsidian",
 		};

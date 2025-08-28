@@ -115,7 +115,7 @@ function Sidebar(props) {
 							onClick={() => props.onChangeView('thumbnails')}
 						><IconThumbnails/></button>
 					}
-					{/* <button
+					<button
 						id="viewAnnotations"
 						className={cx('toolbar-button', { active: props.view === 'annotations' })}
 						tabIndex={-1}
@@ -124,7 +124,7 @@ function Sidebar(props) {
 						aria-selected={props.view === 'annotations' }
 						aria-controls="annotationsView"
 						onClick={() => props.onChangeView('annotations')}
-					><IconAnnotations/></button> */}
+					><IconAnnotations/></button>
 					<button
 						id="viewOutline"
 						className={cx('toolbar-button', { active: props.view === 'outline' })}
@@ -158,9 +158,9 @@ function Sidebar(props) {
 				<div className={cx("viewWrapper", { hidden: props.view !== 'thumbnails'})}>
 					{props.thumbnailsView}
 				</div>
-				{/* <div id="annotationsView" role="tabpanel" aria-labelledby="viewAnnotations" className={cx("viewWrapper", { hidden: props.view !== 'annotations'})}>
+				<div id="annotationsView" role="tabpanel" aria-labelledby="viewAnnotations" className={cx("viewWrapper", { hidden: props.view !== 'annotations'})}>
 					{props.annotationsView}
-				</div> */}
+				</div>
 				<div className={cx("viewWrapper", { hidden: props.view !== 'outline'})} role="tabpanel">
 					{props.outlineView}
 				</div>
