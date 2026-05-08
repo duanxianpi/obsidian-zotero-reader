@@ -30,8 +30,11 @@ export class KeyboardManager {
 		this.mod = mod;
 
 		// Bubble key-up events to the parent window (e.g. Obsidian hotkeys)
-		// ZotFlow
-		if (!event.defaultPrevented && !event.cancelBubble && window.findParentWindow() !== window) {
+		// ZotFlow: Skip bubbling when the event originates inside a text box
+		// (e.g. annotation comment editor). Otherwise Obsidian's EditorSuggest
+		// receives both the synthetic event dispatched by the embedded CodeMirror
+		// keymap and this bubbled copy, causing double navigation.
+		if (!event.defaultPrevented && !event.cancelBubble && !isTextBox(event.target) && window.findParentWindow() !== window) {
 			try {
 				window.findParentWindow().dispatchEvent(new KeyboardEvent(event.type, {
 					key: event.key,
@@ -363,8 +366,11 @@ export class KeyboardManager {
 		}
 
 		// Bubble unhandled key events to the parent window (e.g. Obsidian hotkeys)
-		// ZotFlow
-		if (!event.defaultPrevented && !event.cancelBubble && window.findParentWindow() !== window) {
+		// ZotFlow: Skip bubbling when the event originates inside a text box
+		// (e.g. annotation comment editor). Otherwise Obsidian's EditorSuggest
+		// receives both the synthetic event dispatched by the embedded CodeMirror
+		// keymap and this bubbled copy, causing double navigation.
+		if (!event.defaultPrevented && !event.cancelBubble && !isTextBox(event.target) && window.findParentWindow() !== window) {
 			try {
 				window.findParentWindow().dispatchEvent(new KeyboardEvent(event.type, {
 					key: event.key,
