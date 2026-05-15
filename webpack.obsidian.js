@@ -1,5 +1,7 @@
 // webpack.reader.config.js
+const fs = require("fs");
 const path = require("path");
+const TerserPlugin = require("terser-webpack-plugin");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
 const CssMinimizerPlugin = require("css-minimizer-webpack-plugin");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
@@ -7,6 +9,10 @@ const ZoteroLocalePlugin = require("./webpack.zotero-locale-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 const InlineHtmlAssetsPlugin = require("./webpack.inline-html-assets-plugin");
 const PdfWorkerPlugin = require("./webpack.pdf-worker-plugin");
+
+const ZOTERO_LOCALE_COMMIT = fs
+	.readFileSync(path.resolve(__dirname, ".zotero-locale-commit"), "utf8")
+	.trim();
 
 module.exports = (_env, argv) => {
 	const mode = argv.mode || "development";
@@ -29,6 +35,7 @@ module.exports = (_env, argv) => {
 			library: {
 				name: "reader",
 				type: "umd",
+				umdNamedDefine: true,
 			},
 			chunkFilename: "[name].reader.js",
 		},
@@ -37,29 +44,35 @@ module.exports = (_env, argv) => {
 			splitChunks: false, // obsidian does not support split chunks
 			runtimeChunk: false,
 			usedExports: false,
-			minimizer: [new CssMinimizerPlugin(), "..."],
+			minimizer: [
+				new CssMinimizerPlugin(),
+				new TerserPlugin({ terserOptions: { compress: { passes: 2 } } }),
+			],
 		},
 		module: {
 			rules: [
 				{
 					test: /\.(ts|js)x?$/,
-					exclude: /node_modules/,
-					loader: "babel-loader",
-					options: {
-						presets: [
-							[
-								"@babel/preset-env",
-								{
-									useBuiltIns: false,
-									targets: { electron: 34, chrome: 132 },
-								},
+					include: path.resolve(__dirname, "./src"),
+					use: {
+						loader: "babel-loader",
+						options: {
+							presets: [
+								[
+									"@babel/preset-env",
+									{
+										useBuiltIns: false,
+										targets: { electron: 34, chrome: 132 },
+									},
+								],
 							],
-						],
+						},
 					},
 				},
 				{
 					test: /\.s?css$/,
-					exclude: path.resolve(__dirname, "src/dom"),
+					include: path.resolve(__dirname, "./src"),
+					exclude: path.resolve(__dirname, "./src/dom"),
 					use: [
 						MiniCssExtractPlugin.loader,
 						"css-loader",
@@ -74,7 +87,7 @@ module.exports = (_env, argv) => {
 				},
 				{
 					test: /\.scss$/,
-					include: path.resolve(__dirname, "src/dom"),
+					include: path.resolve(__dirname, "./src/dom"),
 					use: [
 						"raw-loader",
 						{
@@ -87,10 +100,15 @@ module.exports = (_env, argv) => {
 				},
 				{
 					test: /\.svg$/i,
+					include: path.resolve(__dirname, "./res/icons"),
 					issuer: /\.[jt]sx?$/,
 					use: ["@svgr/webpack"],
 				},
-				{ test: /\.ftl$/, type: "asset/source" },
+				{
+					test: /\.ftl$/,
+					include: path.resolve(__dirname, "./locales"),
+					type: "asset/source",
+				},
 				{
 					test: /(tex|FontData)\.js$/, // Inline MathJax TeX font URLs
 					include: [
@@ -121,9 +139,13 @@ module.exports = (_env, argv) => {
 
 		plugins: [
 			new ZoteroLocalePlugin({
-				files: ["zotero.ftl", "reader.ftl"],
+				files: [
+					"zotero.ftl",
+					"reader.ftl",
+					{ src: "app/assets/branding/locale/brand.ftl", dest: "brand.ftl" },
+				],
 				locales: ["en-US"],
-				commitHash: "37f8c4d4f425244b5ead77bb7e129d828f62fb43",
+				commitHash: ZOTERO_LOCALE_COMMIT,
 			}),
 			new CleanWebpackPlugin({
 				cleanOnceBeforeBuildPatterns: ["**/*", "!pdf/**"],

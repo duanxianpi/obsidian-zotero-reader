@@ -1,4 +1,7 @@
 import Reader from "./common/reader";
+import zoteroFTL from '../locales/en-US/zotero.ftl';
+import readerFTL from '../locales/en-US/reader.ftl';
+import brandFTL from '../locales/en-US/brand.ftl';
 import { ObsidianBridge } from "./obsidian-adapter";
 
 /**
@@ -23,6 +26,7 @@ export default class ZoteroReaderAdapter {
 
 	async createReader(opts) {
 		const defaults = {
+			ftl: opts.ftl || [zoteroFTL, readerFTL, brandFTL],
 			readOnly: false,
 			annotations: [],
 			primaryViewState: {},
