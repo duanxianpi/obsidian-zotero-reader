@@ -1,5 +1,6 @@
 import { Selector } from "../dom/common/lib/selector";
-import { ReflowableAppearance } from "../dom/common/dom-view";
+import { ReflowableAppearance } from "../dom/common/lib/appearance";
+import { PersistentRange } from '../dom/common/lib/range';
 
 export type ToolType =
 	| 'highlight'
@@ -61,12 +62,16 @@ export type NavLocation = {
 	scrollCoords?: [number, number];
 };
 
-export type Position = PDFPosition | Selector;
+export type Position = PDFPosition | Selector | RangeRef;
 
 export type PDFPosition = {
 	pageIndex: number;
 	rects?: number[][];
 	paths?: number[][];
+};
+
+export type RangeRef = {
+	range: PersistentRange;
 };
 
 type NewAnnotationOptionalFields =
@@ -112,7 +117,7 @@ export type ViewStats = {
 	spreadMode?: number;
 	flowMode?: string;
 	appearance?: Partial<ReflowableAppearance>;
-	fontFamily?: string;
+	fixedLayout?: boolean;
 	outlinePath?: number[];
 	readingModeEnabled?: boolean;
 };
@@ -173,6 +178,66 @@ export type FindState = {
 	} | null;
 };
 
+export type ReadAloudAnnotationPopup = {
+	annotation: Annotation;
+	baseSegmentIndex: number;
+	startSegmentIndex: number;
+	endSegmentIndex: number;
+	segments: ReadAloudSegment[];
+};
+
+/**
+ * UI-only state stored on the React state tree.
+ * Engine state (playback, segments, and voice) lives in ReadAloudManager.
+ */
+export type ReadAloudState = {
+	popupOpen: boolean;
+	lang?: string;
+	annotationPopup: ReadAloudAnnotationPopup | null;
+	segmentAnnotations: Map<number, string>;
+	savedPosition?: Position | null;
+};
+
+/**
+ * Composed state pushed to views for display (spotlights and scrolling)
+ * and segment computation.
+ */
+export type ReadAloudStateSnapshot = {
+	popupOpen: boolean;
+	active: boolean;
+	paused: boolean;
+	segmentGranularity: ReadAloudGranularity | null;
+	segments: ReadAloudSegment[] | null;
+	activeSegment: ReadAloudSegment | null;
+	backwardStopIndex: number | null;
+	forwardStopIndex: number | null;
+	targetPosition?: Position;
+	lang: string | null;
+	lastSkipGranularity: 'sentence' | 'paragraph' | null;
+	annotationPopup: ReadAloudAnnotationPopup | null;
+};
+
+/**
+ * Modifications to composed state that can be returned by views
+ * using onSetReadAloudState().
+ */
+export type ReadAloudStateDelta = {
+	segments?: ReadAloudSegment[] | null;
+	backwardStopIndex?: number | null;
+	forwardStopIndex?: number | null;
+	targetPosition?: Position;
+	lang?: string | null;
+};
+
+export type ReadAloudSegment = {
+	position: Position;
+	text: string;
+	granularity: ReadAloudGranularity;
+	anchor: 'paragraphStart' | null;
+};
+
+export type ReadAloudGranularity = 'paragraph' | 'sentence';
+
 export type MaybePromise<T> = Promise<T> | T;
 
 export type ColorScheme = 'light' | 'dark';
@@ -182,6 +247,7 @@ export type Theme = {
 	label: string;
 	background: string;
 	foreground: string;
+	invertImages?: boolean;
 };
 
 export type ViewContextMenuOverlay =
@@ -197,3 +263,4 @@ export type ViewContextMenuOverlay =
 		type: 'image';
 		image: ImageBitmapSource;
 	};
+

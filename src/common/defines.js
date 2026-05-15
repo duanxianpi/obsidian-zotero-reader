@@ -20,6 +20,9 @@ export const DARKEN_INK_AND_TEXT_COLOR = 5; // percent
 //export let SELECTION_COLOR = navigator.platform.includes('Mac') ? '#71ADFD' : 'Highlight';
 // TEMP: Use Mac color everywhere, since Highlight is too dark on Windows without opacity
 export let SELECTION_COLOR = '#71ADFD';
+export const READ_ALOUD_BASE_COLOR = '#4072e5';
+export const READ_ALOUD_ACTIVE_SEGMENT_COLOR = READ_ALOUD_BASE_COLOR + '73';
+export const READ_ALOUD_ACTIVE_SENTENCE_COLOR = READ_ALOUD_BASE_COLOR + '4d';
 
 export const PDF_NOTE_DIMENSIONS = 22; // pt
 export const MIN_IMAGE_ANNOTATION_SIZE = 10; // pt
@@ -47,8 +50,11 @@ export const TEXT_ANNOTATION_FONT_SIZE_STEPS = [6, 8, 10, 12, 14, 18, 24, 36, 48
 
 export const DEFAULT_THEMES = [
 	{ id: 'dark', label: 'Dark', background: "#2E3440", foreground: "#D8DEE9" },
+	{ id: 'black', label: 'Black', background: "#000000", foreground: "#FFFFFF", invertImages: true },
 	{ id: 'snow', label: 'Snow', background: "#ECEFF4", foreground: "#3B4252" },
 	{ id: 'sepia', label: 'Sepia', background: "#F4ECD8", foreground: "#5B4636" }
 ];
 
 export const A11Y_VIRT_CURSOR_DEBOUNCE_LENGTH = 500; // ms
+
+export const READ_ALOUD_SEGMENT_MAX_LENGTH = 5000; // UTF-8 bytes

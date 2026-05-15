@@ -5,12 +5,15 @@ import {
 	NavLocation,
 	NewAnnotation,
 	ViewStats,
-	OutlineItem
+	OutlineItem,
+	ReadAloudGranularity
 } from "../../common/types";
 import {
 	getBoundingPageRect,
 	getInnerText,
-	getStartElement
+	getStartElement,
+	moveRangeEndsIntoTextNodes,
+	PersistentRange
 } from "../common/lib/range";
 import {
 	CssSelector,
@@ -31,12 +34,13 @@ import {
 import DefaultFindProcessor, { createSearchContext } from "../common/lib/find";
 import injectCSS from './stylesheets/inject.scss';
 import darkReaderJS from '!!raw-loader!darkreader/darkreader';
-import type { DynamicThemeFix } from "darkreader";
+import { DynamicThemeFix } from "darkreader";
 import { isPageRectVisible } from "../common/lib/rect";
 import { debounceUntilScrollFinishes, isSafari } from "../../common/lib/utilities";
 import { scrollIntoView } from "../common/lib/scroll-into-view";
 import { SORT_INDEX_LENGTH, SORT_INDEX_LENGTH_OLD } from "./defines";
 import { ReadingMode } from "./reading-mode";
+import { detectLang } from '../../common/lib/detect-lang';
 
 class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 	protected _find: DefaultFindProcessor | null = null;
@@ -106,6 +110,15 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		};
 	}
 
+	get lang(): string {
+		let lang = this._iframeDocument.body.lang || this._iframeDocument.documentElement.lang;
+		if (!lang) {
+			lang = detectLang(this._iframeDocument.body.innerText) || 'en';
+			this._iframeDocument.documentElement.lang = lang;
+		}
+		return lang;
+	}
+
 	protected override _handleIFrameLoaded() {
 		let maxRules = this._options.preview ? 100 : 500;
 		let numRules = 0;
@@ -113,27 +126,33 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		let foundSFImg = false;
 		let foundFontFace = false;
 		for (let sheet of this._iframeDocument.styleSheets) {
-			// Ignore SingleFile embedded image stylesheet
-			// https://github.com/gildas-lormeau/single-file-core/blob/1b6cecbe0/core/index.js#L1548-L1560
-			if (!foundSFImg && sheet.ownerNode?.textContent?.startsWith(':root{--sf-img-')) {
-				foundSFImg = true;
-				continue;
+			try {
+				// Ignore SingleFile embedded image stylesheet
+				// https://github.com/gildas-lormeau/single-file-core/blob/1b6cecbe0/core/index.js#L1548-L1560
+				if (!foundSFImg && sheet.ownerNode?.textContent?.startsWith(':root{--sf-img-')) {
+					foundSFImg = true;
+					continue;
+				}
+				// Ignore SingleFile font-face stylesheet
+				// https://github.com/gildas-lormeau/single-file-core/blob/1b6cecbe0/core/index.js#L1047-L1055
+				if (!foundFontFace && sheet.ownerNode?.textContent?.startsWith('@font-face{')
+					&& Array.prototype.every.call(
+						sheet.cssRules,
+						rule => rule.constructor.name === 'CSSFontFaceRule'
+					)
+				) {
+					foundFontFace = true;
+					continue;
+				}
+				numRules += sheet.cssRules.length;
+				if (numRules > maxRules) {
+					this._isDynamicThemeSupported = false;
+					break;
+				}
 			}
-			// Ignore SingleFile font-face stylesheet
-			// https://github.com/gildas-lormeau/single-file-core/blob/1b6cecbe0/core/index.js#L1047-L1055
-			if (!foundFontFace && sheet.ownerNode?.textContent?.startsWith('@font-face{')
-				&& Array.prototype.every.call(
-					sheet.cssRules,
-					rule => rule.constructor.name === 'CSSFontFaceRule'
-				)
-			) {
-				foundFontFace = true;
-				continue;
-			}
-			numRules += sheet.cssRules.length;
-			if (numRules > maxRules) {
-				this._isDynamicThemeSupported = false;
-				break;
+			catch {
+				// Cross-origin violation, etc.
+				// Doesn't matter, this is just a heuristic for disabling Reading Mode
 			}
 		}
 
@@ -252,7 +271,7 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		this._options.onSetOutline(outline);
 	}
 
-	protected _getAnnotationFromRange(range: Range, type: AnnotationType, color?: string): NewAnnotation<WADMAnnotation> | null {
+	getAnnotationFromRange(range: Range, type: AnnotationType, color?: string): NewAnnotation<WADMAnnotation> | null {
 		if (range.collapsed) {
 			return null;
 		}
@@ -291,19 +310,10 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 			return 0;
 		};
 
-		let count: number;
-		if (this._readingMode.enabled) {
-			let newRange = this._readingMode.mapRangeFromFocus(range);
-			if (newRange) {
-				count = getCount(this._readingMode.originalRoot, newRange.startContainer, newRange.startOffset);
-			}
-			else {
-				count = 0;
-			}
-		}
-		else {
-			count = getCount(this._iframeDocument.body, range.startContainer, range.startOffset);
-		}
+		let mappedRange = this._readingMode.enabled ? this._readingMode.mapRangeFromFocus(range) : range;
+		let count = mappedRange
+			? getCount(this._readingMode.preBody, mappedRange.startContainer, mappedRange.startOffset)
+			: 0;
 		let countString = String(count).padStart(SORT_INDEX_LENGTH, '0');
 		if (countString.length > SORT_INDEX_LENGTH) {
 			countString = countString.substring(0, SORT_INDEX_LENGTH);
@@ -362,8 +372,7 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 				if (selector.refinedBy && selector.refinedBy.type != 'TextPositionSelector') {
 					throw new Error('CssSelectors can only be refined by TextPositionSelectors');
 				}
-				let root = (this._readingMode.enabled ? this._readingMode.originalRoot : this._iframeDocument)
-					.querySelector(selector.value);
+				let root = this._readingMode.preBody.querySelector(selector.value);
 				if (!root) {
 					console.error(`Unable to locate selector root for selector '${selector.value}' (reading mode: ${this._readingMode.enabled})`);
 					return null;
@@ -378,6 +387,9 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 				}
 				if (this._readingMode.enabled) {
 					let newRange = this._readingMode.mapRangeToFocus(range);
+					if (!newRange) {
+						newRange = this._readingMode.mapRangeToFocus(moveRangeEndsIntoTextNodes(range));
+					}
 					if (!newRange) {
 						return null;
 					}
@@ -408,7 +420,7 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		return { scrollCoords: [this._iframeWindow.scrollX, this._iframeWindow.scrollY] };
 	}
 
-	protected _navigateToSelector(selector: Selector, options: NavigateOptions = {}) {
+	navigateToSelector(selector: Selector, options: NavigateOptions = {}) {
 		let range = this.toDisplayedRange(selector);
 		if (!range) {
 			// Suppress log when failure is likely just due to reading mode
@@ -417,7 +429,17 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 			}
 			return;
 		}
+
 		let elem = getStartElement(range);
+
+		if (options.ifNeeded && isPageRectVisible(
+			getBoundingPageRect(elem ?? range),
+			this._iframeWindow,
+			options.visibilityMargin ?? 0
+		)) {
+			return;
+		}
+
 		if (elem) {
 			elem.scrollIntoView(options);
 			// Remember which node was navigated to for screen readers to place
@@ -425,10 +447,6 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 			debounceUntilScrollFinishes(this._iframeDocument).then(() => {
 				this._a11yVirtualCursorTarget = elem;
 			});
-		}
-
-		if (options.ifNeeded && isPageRectVisible(getBoundingPageRect(range), this._iframeWindow, 0)) {
-			return;
 		}
 
 		scrollIntoView(range, options);
@@ -466,6 +484,10 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 			readingModeEnabled: this._readingMode.enabled,
 		};
 		this._options.onChangeViewStats(viewStats);
+	}
+
+	protected _getRoots(): HTMLElement[] {
+		return [this._iframeDocument.body];
 	}
 
 	protected override _updateColorScheme() {
@@ -521,6 +543,10 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		super._handleScroll(event);
 		this._updateViewState();
 		this._pushHistoryPoint(true);
+
+		if (this._readAloud.state?.active && !this._readAloud.scrolling) {
+			this._onManualNavigation();
+		}
 	}
 
 	protected _handleVisibilityChange() {
@@ -566,7 +592,7 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 								snippets: result.snippets,
 								annotation: (
 									result.range
-									&& this._getAnnotationFromRange(result.range.toRange(), 'highlight')
+									&& this.getAnnotationFromRange(result.range.toRange(), 'highlight')
 								) ?? undefined,
 								currentPageLabel: null,
 								currentSnippet: result.snippets[result.index]
@@ -602,10 +628,6 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		}
 	}
 
-	// ***
-	// Public methods to control the view from the outside
-	// ***
-
 	findNext() {
 		console.log('Find next');
 		if (this._find) {
@@ -626,6 +648,33 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 			}
 			this._renderAnnotations();
 		}
+	}
+
+	override getReadAloudRanges(granularity: ReadAloudGranularity): Range[] {
+		if (this._readingMode.enabled) {
+			return super.getReadAloudRanges(granularity);
+		}
+
+		let segmentsWithReadingModeEnabled = this._keepSelection(() => {
+			try {
+				this._readingMode.enabled = true;
+				return super.getReadAloudRanges(granularity).map((range) => {
+					let mappedRange = this._readingMode.mapRangeFromFocus(range);
+					if (!mappedRange) return null;
+					return new PersistentRange(mappedRange);
+				}).filter(Boolean) as PersistentRange[];
+			}
+			finally {
+				this._readingMode.enabled = false;
+			}
+		});
+		this._handleViewUpdate(false);
+
+		if (segmentsWithReadingModeEnabled.length) {
+			return segmentsWithReadingModeEnabled.map(r => r.toRange());
+		}
+
+		return super.getReadAloudRanges(granularity);
 	}
 
 	protected _setScale(scale: number) {
@@ -702,6 +751,10 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		}
 		// Reinitialize outline to remove inaccessible sections
 		this._initOutline();
+		// Reset Read Aloud segments, since ranges will no longer be valid
+		if (this._readAloud.state?.active && this._readAloud.state.segments !== null) {
+			this._options.onSetReadAloudState({ segments: null });
+		}
 		// Wait a frame due to layout not updating synchronously after <body>
 		// is replaced in Firefox
 		requestAnimationFrame(() => {

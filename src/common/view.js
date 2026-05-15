@@ -1,3 +1,4 @@
+import PDFView from '../pdf/pdf-view';
 import EPUBView from '../dom/epub/epub-view';
 import SnapshotView from '../dom/snapshot/snapshot-view';
 import { debounce } from './lib/debounce';
@@ -39,6 +40,7 @@ class View {
 			annotations: options.annotations,
 			onSave: options.onSaveAnnotations,
 			onDelete: nop,
+			adjustTextAnnotationPosition: (annotation, adjustOptions) => this._view.adjustTextAnnotationPosition(annotation, adjustOptions),
 			onRender: (annotations) => {
 				this._view.setAnnotations(annotations);
 			},
@@ -68,6 +70,7 @@ class View {
 
 		let common = {
 			primary: true,
+			platform: this._options.platform,
 			mobile: true,
 			showAnnotations: true,
 			container: this._options.container,
@@ -108,7 +111,20 @@ class View {
 			onBackdropTap: this._options.onBackdropTap,
 		};
 
-		if (this._type === 'epub') {
+		if (this._type === 'pdf') {
+			return new PDFView({
+				...common,
+				password: this._options.password,
+				pageLabels: this._options.pageLabels || [],
+				onRequestPassword: this._options.onRequestPassword || nop,
+				onInitThumbnails: this._options.onInitThumbnails,
+				onSetThumbnails: this._options.onSetThumbnails || nop,
+				onRenderThumbnail: this._options.onRenderThumbnail,
+				onSetPageLabels: this._options.onSetPageLabels || nop,
+				// PDF can delete annotations inside the view, for example by completely erasing ink.
+				onDeleteAnnotations: this._options.onDeleteAnnotations || nop
+			});
+		} else if (this._type === 'epub') {
 			return new EPUBView({
 				...common
 			});
@@ -204,6 +220,7 @@ class View {
 	 * @param {Array} ids Array of annotation ids (item keys)
 	 */
 	selectAnnotations(ids) {
+		this._options.selectedAnnotationIDs = ids;
 		this._view.setSelectedAnnotationIDs(ids);
 	}
 
@@ -239,6 +256,18 @@ class View {
 	 */
 	navigateForward() {
 		this._view.navigateForward();
+	}
+
+	enterPassword(password) {
+		this._ensureType('pdf');
+		this._options.password = password;
+		if (this._view.enterPassword?.(password)) {
+			return;
+		}
+		this._options.container.replaceChildren();
+		this._view = this._createView();
+		this._view.setAnnotations([...this._annotationManager._annotations]);
+		this._view.setSelectedAnnotationIDs(this._options.selectedAnnotationIDs || []);
 	}
 
 	/**
@@ -305,6 +334,19 @@ class View {
 
 	setFontFamily(fontFamily) {
 		this._view.setFontFamily(fontFamily);
+	}
+
+	setPageLabels(pageLabels) {
+		this._view.setPageLabels?.(pageLabels);
+	}
+
+	renderThumbnails(pageIndexes) {
+		this._ensureType('pdf');
+		this._view.renderThumbnails?.(pageIndexes);
+	}
+
+	setReadAloudSpotlight(selector) {
+		this._view.setSpotlight('ReadAloudActiveSegment', selector, null);
 	}
 }
 

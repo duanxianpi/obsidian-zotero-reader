@@ -3,7 +3,7 @@ import cx from 'classnames';
 
 import IconRevert from '../../../../res/icons/16/revert.svg';
 import { useLocalization } from '@fluent/react';
-import { DEFAULT_REFLOWABLE_APPEARANCE } from '../../../dom/common/defines';
+import { DEFAULT_REFLOWABLE_APPEARANCE } from '../../../dom/common/lib/appearance';
 
 import IconColumnDouble from '../../../../res/icons/16/column-double.svg';
 import IconColumnSingle from '../../../../res/icons/16/column-single.svg';
@@ -330,25 +330,54 @@ function AppearancePopup(props) {
 								><IconFlowScrolled/></button>
 							</div>
 						</div>
-						<div className="option">
-							<label>{l10n.getString('reader-columns')}</label>
-							<div className="split-toggle" data-tabstop={1}>
-								<button
-									tabIndex={-1}
-									className={cx({ active: props.viewStats.spreadMode === 0 })}
-									title={l10n.getString('reader-single')}
-									onClick={() => props.onChangeSpreadMode(0)}
-									disabled={props.viewStats.flowMode === 'scrolled'}
-								><IconColumnSingle/></button>
-								<button
-									tabIndex={-1}
-									className={cx({ active: props.viewStats.spreadMode === 1 })}
-									title={l10n.getString('reader-double')}
-									onClick={() => props.onChangeSpreadMode(1)}
-									disabled={props.viewStats.flowMode === 'scrolled'}
-								><IconColumnDouble/></button>
+						{!props.viewStats.fixedLayout && (
+							<div className="option">
+								<label>{l10n.getString('reader-columns')}</label>
+								<div className="split-toggle" data-tabstop={1}>
+									<button
+										tabIndex={-1}
+										className={cx({ active: props.viewStats.spreadMode === 0 })}
+										title={l10n.getString('reader-single')}
+										onClick={() => props.onChangeSpreadMode(0)}
+										disabled={props.viewStats.flowMode === 'scrolled'}
+									><IconColumnSingle/></button>
+									<button
+										tabIndex={-1}
+										className={cx({ active: props.viewStats.spreadMode === 1 })}
+										title={l10n.getString('reader-double')}
+										onClick={() => props.onChangeSpreadMode(1)}
+										disabled={props.viewStats.flowMode === 'scrolled'}
+									><IconColumnDouble/></button>
+								</div>
 							</div>
-						</div>
+						)}
+					</div>
+				)}
+				{(type === 'epub' || type === 'snapshot') && !(type === 'epub' && props.viewStats.fixedLayout) && (
+					<div className="group">
+						{type === 'snapshot' && (
+							<div className="option">
+								<label htmlFor="reading-mode-enabled">{l10n.getString('reader-reading-mode')}</label>
+								<input
+									data-tabstop={1}
+									tabIndex={-1}
+									className="switch"
+									type="checkbox"
+									id="reading-mode-enabled"
+									checked={props.viewStats.readingModeEnabled}
+									onChange={e => props.onChangeReadingModeEnabled(e.target.checked)}
+								/>
+							</div>
+						)}
+						{(type === 'epub' || props.viewStats.readingModeEnabled) && (
+							<ReflowableAppearanceSection
+								params={props.viewStats.appearance}
+								enablePageWidth={type === 'snapshot'
+									|| props.viewStats.flowMode !== 'paginated' || props.viewStats.spreadMode === 0}
+								onChange={props.onChangeAppearance}
+								indent={type === 'snapshot'}
+							/>
+						)}
 					</div>
 				)}
 				<div className="group">
@@ -376,33 +405,6 @@ function AppearancePopup(props) {
 						</div>
 					</div>
 				</div>
-				{(type === 'epub' || type === 'snapshot') && (
-					<div className="group">
-						{type === 'snapshot' && (
-							<div className="option">
-								<label htmlFor="reading-mode-enabled">{l10n.getString('reader-reading-mode')}</label>
-								<input
-									data-tabstop={1}
-									tabIndex={-1}
-									className="switch"
-									type="checkbox"
-									id="reading-mode-enabled"
-									checked={props.viewStats.readingModeEnabled}
-									onChange={e => props.onChangeReadingModeEnabled(e.target.checked)}
-								/>
-							</div>
-						)}
-						{(type === 'epub' || props.viewStats.readingModeEnabled) && (
-							<ReflowableAppearanceSection
-								params={props.viewStats.appearance}
-								enablePageWidth={type === 'snapshot'
-									|| props.viewStats.flowMode !== 'paginated' || props.viewStats.spreadMode === 0}
-								onChange={props.onChangeAppearance}
-								indent={type === 'snapshot'}
-							/>
-						)}
-					</div>
-				)}
 				<div className="group">
 					<div className="option themes">
 						<label>{l10n.getString('reader-themes')}</label>

@@ -1,10 +1,16 @@
 const path = require('path');
+const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
+const TerserPlugin = require('terser-webpack-plugin');
 const { CleanWebpackPlugin } = require('clean-webpack-plugin');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 const ZoteroLocalePlugin = require('./webpack.zotero-locale-plugin');
+const { EnvironmentPlugin } = require('webpack');
+const fs = require('fs');
+
+const ZOTERO_LOCALE_COMMIT = fs.readFileSync(path.resolve(__dirname, '.zotero-locale-commit'), 'utf8').trim();
 
 function generateReaderConfig(build) {
 	let config = {
@@ -15,100 +21,47 @@ function generateReaderConfig(build) {
 			reader: [
 				'./src/index.' + build + '.js',
 				'./src/common/stylesheets/main.scss'
-			]
+			],
+			...(build === 'zotero'
+				? {
+					'read-aloud-first-run': './src/index.read-aloud-first-run.js',
+					'read-aloud-voices': './src/index.read-aloud-voices.js',
+				}
+				: {}),
 		},
 		output: {
 			path: path.resolve(__dirname, './build/' + build),
-			filename: 'reader.js',
+			filename: '[name].js',
 			libraryTarget: 'umd',
 			publicPath: '',
 			library: {
-				name: 'reader',
+				name: '[name]',
 				type: 'umd',
 				umdNamedDefine: true,
 			},
 		},
 		optimization: {
 			minimize: build === 'web',
-			minimizer: [new CssMinimizerPlugin(), '...'], // ... is for built-in TerserPlugin https://webpack.js.org/configuration/optimization/#optimizationminimizer
+			minimizer: [
+				new CssMinimizerPlugin(),
+				new TerserPlugin({ terserOptions: { compress: { passes: 2 } } }),
+			],
 		},
 		module: {
-			rules: [
-				{
-					test: /\.(ts|js)x?$/,
-					exclude: /node_modules/,
-					use: {
-						loader: 'babel-loader',
-						options: {
-							presets: [
-								['@babel/preset-env', {
-									useBuiltIns: false,
-									targets: build === 'zotero' || build === 'dev'
-										? { firefox: 115, chrome: 128 }
-										: undefined
-								}],
-							],
-						},
-					},
-				},
-				build === 'dev' && {
-					test: /\.tsx?$/,
-					exclude: /node_modules/,
-					use: 'ts-loader',
-				},
-				{
-					test: /\.s?css$/,
-					exclude: path.resolve(__dirname, './src/dom'),
-					use: [
-						MiniCssExtractPlugin.loader,
-						{
-							loader: 'css-loader',
-						},
-						{
-							loader: 'postcss-loader',
-						},
-						{
-							loader: 'sass-loader',
-							options: {
-								additionalData: `$platform: '${build}';`
-							}
-						},
-					],
-				},
-				{
-					test: /\.scss$/,
-					include: path.resolve(__dirname, './src/dom'),
-					use: [
-						{
-							loader: 'raw-loader',
-						},
-						{
-							loader: 'sass-loader',
-							options: {
-								additionalData: `$platform: '${build}';`
-							}
-						}
-					]
-				},
-				{
-					test: /\.svg$/i,
-					issuer: /\.[jt]sx?$/,
-					use: ['@svgr/webpack'],
-				},
-				{
-					test: /\.ftl$/,
-					type: 'asset/source'
-				}
-			].filter(Boolean)
+			rules: generateRules(build),
 		},
 		resolve: {
 			extensions: ['.js', '.ts', '.tsx'],
 		},
 		plugins: [
-			new ZoteroLocalePlugin({
-				files: ['zotero.ftl', 'reader.ftl'],
+			build !== 'zotero' && new ZoteroLocalePlugin({
+				files: [
+					'zotero.ftl',
+					'reader.ftl',
+					{ src: 'app/assets/branding/locale/brand.ftl', dest: 'brand.ftl' },
+				],
 				locales: ['en-US'],
-				commitHash: '42b47c54536d418f9b80e11ce55be5ff5e86b79c',
+				commitHash: ZOTERO_LOCALE_COMMIT,
 			}),
 			new CleanWebpackPlugin({
 				cleanOnceBeforeBuildPatterns: ['**/*', '!pdf/**']
@@ -118,7 +71,24 @@ function generateReaderConfig(build) {
 			}),
 			new HtmlWebpackPlugin({
 				template: './index.reader.html',
-				filename: './[name].html',
+				filename: './reader.html',
+				chunks: ['reader'],
+				templateParameters: {
+					build
+				},
+			}),
+			build === 'zotero' && new HtmlWebpackPlugin({
+				template: './index.read-aloud-first-run.html',
+				filename: './read-aloud-first-run.html',
+				chunks: ['read-aloud-first-run'],
+				templateParameters: {
+					build
+				},
+			}),
+			build === 'zotero' && new HtmlWebpackPlugin({
+				template: './index.read-aloud-voices.html',
+				filename: './read-aloud-voices.html',
+				chunks: ['read-aloud-voices'],
 				templateParameters: {
 					build
 				},
@@ -131,7 +101,7 @@ function generateReaderConfig(build) {
 					}
 				],
 			}),
-		],
+		].filter(Boolean),
 	};
 
 	if (build === 'zotero') {
@@ -146,6 +116,14 @@ function generateReaderConfig(build) {
 			// No support for importing EPUB annotations on the web, so no need for luaparse there
 			luaparse: 'luaparse',
 		};
+		// Mimic upstream pdf.js production build by defining PDFJSDev so that
+		// dev-only validation code is eliminated as dead code by terser
+		config.plugins.push(
+			new webpack.DefinePlugin({
+				'typeof PDFJSDev': JSON.stringify('object'),
+				PDFJSDev: '({ test: () => false })',
+			})
+		);
 	}
 	else if (build === 'dev') {
 		config.plugins.push(
@@ -158,7 +136,10 @@ function generateReaderConfig(build) {
 				options: {
 
 				}
-			})
+			}),
+			new EnvironmentPlugin({
+				ZOTERO_API_KEY: null,
+			}),
 		);
 		config.devServer = {
 			static: {
@@ -203,63 +184,7 @@ function generateViewConfig(build) {
 			minimizer: [new CssMinimizerPlugin(), '...'], // ... is for built-in TerserPlugin https://webpack.js.org/configuration/optimization/#optimizationminimizer
 		},
 		module: {
-			rules: [
-				{
-					test: /\.(js|jsx)$/,
-					exclude: /node_modules/,
-					use: {
-						loader: 'babel-loader',
-						options: {
-							presets: [
-								['@babel/preset-env', { useBuiltIns: false }],
-							],
-						},
-					},
-				},
-				{
-					test: /\.tsx?$/,
-					exclude: /node_modules/,
-					use: {
-						loader: 'ts-loader',
-						options: {
-							compilerOptions: {
-								target: 'ES2022'
-							}
-						}
-					},
-				},
-				{
-					test: /\.s?css$/,
-					exclude: path.resolve(__dirname, './src/dom'),
-					use: [
-						MiniCssExtractPlugin.loader,
-						{
-							loader: 'css-loader',
-						},
-						{
-							loader: 'postcss-loader',
-						},
-						{
-							loader: 'sass-loader',
-						},
-					]
-				},
-				{
-					test: /\.scss$/,
-					include: path.resolve(__dirname, './src/dom'),
-					use: [
-						{
-							loader: 'raw-loader',
-						},
-						{
-							loader: 'sass-loader',
-							options: {
-								additionalData: `$platform: '${build}';`
-							}
-						}
-					]
-				}
-			],
+			rules: generateRules(build),
 		},
 		resolve: {
 			extensions: ['.js', '.ts', '.tsx']
@@ -281,10 +206,31 @@ function generateViewConfig(build) {
 		],
 	};
 
+	if (build === 'android' || build === 'view-dev') {
+		config.plugins.push(
+			new CopyWebpackPlugin({
+				patterns: [
+					{ from: 'build/mobile/pdf/LICENSE', to: './pdf/' },
+					{ from: 'build/mobile/pdf/build/pdf.mjs', to: './pdf/build/' },
+					{ from: 'build/mobile/pdf/build/pdf.worker.mjs', to: './pdf/build/' },
+					{ from: 'build/mobile/pdf/web/cmaps', to: './pdf/web/cmaps' },
+					{ from: 'build/mobile/pdf/web/standard_fonts', to: './pdf/web/standard_fonts' },
+					{ from: 'build/mobile/pdf/web/iccs', to: './pdf/web/iccs' },
+					{ from: 'build/mobile/pdf/web/wasm', to: './pdf/web/wasm' },
+					{ from: 'build/mobile/pdf/web/viewer.html', to: './pdf/web/' },
+					{ from: 'build/mobile/pdf/web/viewer.mjs', to: './pdf/web/' },
+					{ from: 'build/mobile/pdf/web/images/loading-icon.gif', to: './pdf/web/images/' },
+					{ from: 'build/mobile/pdf/web/viewer.css', to: './pdf/web/' },
+				],
+			})
+		);
+	}
+
 	if (build === 'view-dev') {
 		config.plugins.push(
 			new CopyWebpackPlugin({
 				patterns: [
+					{ from: 'demo/pdf/demo.pdf', to: './' },
 					{ from: 'demo/epub/demo.epub', to: './' },
 					{ from: 'demo/snapshot/demo.html', to: './' }
 				],
@@ -307,6 +253,79 @@ function generateViewConfig(build) {
 	}
 
 	return config;
+}
+
+function generateRules(build) {
+	return [
+		{
+			test: /\.(ts|js)x?$/,
+			include: path.resolve(__dirname, './src'),
+			use: {
+				loader: 'babel-loader',
+				options: {
+					presets: [
+						['@babel/preset-env', {
+							useBuiltIns: false,
+							targets: build === 'zotero' || build === 'dev'
+								? { firefox: 115, chrome: 128 }
+								: undefined
+						}],
+					],
+				},
+			},
+		},
+		build.endsWith('dev') && {
+			test: /\.tsx?$/,
+			include: path.resolve(__dirname, './src'),
+			use: 'ts-loader',
+		},
+		{
+			test: /\.s?css$/,
+			include: path.resolve(__dirname, './src'),
+			exclude: path.resolve(__dirname, './src/dom'),
+			use: [
+				MiniCssExtractPlugin.loader,
+				{
+					loader: 'css-loader',
+				},
+				{
+					loader: 'postcss-loader',
+				},
+				{
+					loader: 'sass-loader',
+					options: {
+						additionalData: `$platform: '${build}';`
+					}
+				},
+			],
+		},
+		{
+			test: /\.scss$/,
+			include: path.resolve(__dirname, './src/dom'),
+			use: [
+				{
+					loader: 'raw-loader',
+				},
+				{
+					loader: 'sass-loader',
+					options: {
+						additionalData: `$platform: '${build}';`
+					}
+				}
+			]
+		},
+		{
+			test: /\.svg$/i,
+			include: path.resolve(__dirname, './res/icons'),
+			issuer: /\.[jt]sx?$/,
+			use: ['@svgr/webpack'],
+		},
+		{
+			test: /\.ftl$/,
+			include: path.resolve(__dirname, './locales'),
+			type: 'asset/source'
+		},
+	];
 }
 
 module.exports = [

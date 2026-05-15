@@ -3,6 +3,7 @@ import { p2v, v2p } from './lib/coordinates';
 import {
 	getLineSelectionRanges,
 	getModifiedSelectionRanges,
+	getNodeOffset,
 	getRectRotationOnText,
 	getReversedSelectionRanges,
 	getSelectionRanges,
@@ -10,83 +11,91 @@ import {
 	getSortIndex,
 	getTextFromSelectionRanges,
 	getWordSelectionRanges,
-	setTextLayerSelection,
-	getNodeOffset
+	setTextLayerSelection
 } from './selection';
 import {
+	adjustRectHeightByRatio,
 	applyInverseTransform,
-	applyTransform, adjustRectHeightByRatio,
-	getPageIndexesFromAnnotations,
-	getPositionBoundingRect,
-	intersectAnnotationWithPoint,
-	quickIntersectRect,
-	transform,
-	getBoundingBox,
-	inverseTransform,
-	scaleShape,
-	getRotationTransform,
-	getScaleTransform,
+	applyTransform,
 	calculateScale,
-	getAxialAlignedBoundingBox,
 	distanceBetweenRects,
-	getTransformFromRects,
-	getRotationDegrees,
-	normalizeDegrees,
-	getRectsAreaSize,
+	getAxialAlignedBoundingBox,
+	getBoundingBox,
 	getClosestObject,
 	getOutlinePath,
+	getPageIndexesFromAnnotations,
+	getPositionBoundingRect,
+	getRectsAreaSize,
+	getRotationDegrees,
+	getRotationTransform,
+	getScaleTransform,
+	getTransformFromRects,
+	intersectAnnotationWithPoint,
+	inverseTransform,
+	normalizeDegrees,
+	quickIntersectRect,
+	scaleShape,
+	transform
 } from './lib/utilities';
 import {
 	debounceUntilScrollFinishes,
+	getAffectedAnnotations,
 	getCodeCombination,
 	getKeyCombination,
-	getAffectedAnnotations,
-	isMac,
-	isLinux,
-	isWin,
-	isFirefox,
-	isSafari,
-	throttle,
 	getModeBasedOnColors,
-	placeA11yVirtualCursor
+	isFirefox,
+	isLinux,
+	isMac,
+	isSafari,
+	isWin,
+	placeA11yVirtualCursor,
+	throttle
 } from '../common/lib/utilities';
 import { debounce } from '../common/lib/debounce';
 import { AutoScroll } from './lib/auto-scroll';
 import { PDFThumbnails } from './pdf-thumbnails';
 import {
+	A11Y_VIRT_CURSOR_DEBOUNCE_LENGTH,
 	MIN_IMAGE_ANNOTATION_SIZE,
 	MIN_TEXT_ANNOTATION_WIDTH,
-	PDF_NOTE_DIMENSIONS,
-	A11Y_VIRT_CURSOR_DEBOUNCE_LENGTH
+	PDF_NOTE_DIMENSIONS
 } from '../common/defines';
+import { ReadAloudJumpButton } from '../common/read-aloud/jump-button';
 import PDFRenderer from './pdf-renderer';
 import { drawAnnotationsOnCanvas } from './lib/render';
 import PopupDelayer from '../common/lib/popup-delayer';
 import { adjustTextAnnotationPosition } from './lib/text-annotation';
-import {
-	applyTransformationMatrixToInkPosition,
-	eraseInk,
-	smoothPath
-} from './lib/path';
+import { applyTransformationMatrixToInkPosition, eraseInk, smoothPath } from './lib/path';
 import { History } from '../common/lib/history';
 import { FindState, PDFFindController } from './pdf-find-controller';
+import {
+	buildReadAloudSegments,
+	buildReadAloudSegmentsFromRanges,
+	getReadAloudSelectionBounds,
+	splitReadAloudSegmentsBySelection
+} from './read-aloud-segments';
+import { detectLang } from '../common/lib/detect-lang';
 import { ObsidianBridge } from '../obsidian-adapter';
 
 class PDFView {
 	constructor(options) {
 		this._options = options;
 		this._primary = options.primary;
+		this._mobile = options.mobile;
 		this._readOnly = options.readOnly;
 		this._preview = options.preview;
 		this._container = options.container;
 		this._password = options.password;
+		this._passwordUpdateCallback = null;
 		this._tools = options.tools;
 		this._outline = options.outline;
 		this._lightTheme = options.lightTheme;
 		this._darkTheme = options.darkTheme;
 		this._preferedColorTheme = options.colorScheme;
 		this._onRequestPassword = options.onRequestPassword;
+		this._onInitThumbnails = options.onInitThumbnails;
 		this._onSetThumbnails = options.onSetThumbnails;
+		this._onRenderThumbnail = options.onRenderThumbnail;
 		this._onSetOutline = options.onSetOutline;
 		this._onSetPageLabels = options.onSetPageLabels;
 		this._onChangeViewState = options.onChangeViewState;
@@ -130,6 +139,8 @@ class PDFView {
 		this._findState = options.findState;
 
 		this._scrolling = false;
+		this._readAloudPositionLocked = true;
+		this._readAloudScrolling = false;
 
 
 		// Create a MediaQueryList object
@@ -155,8 +166,13 @@ class PDFView {
 		this._overlayPopupDelayer = new PopupDelayer({ open: !!this._overlayPopup });
 
 		this._selectionRanges = [];
+		this._highlightedPosition = null;
+		this._readAloudHighlightedPosition = null;
+		this._readAloudSentenceHighlightedPosition = null;
 
 		this._iframe = document.createElement('iframe');
+		this._iframe.style.width = '100%';
+		this._iframe.style.height = '100%';
 		this._iframe.addEventListener('load', () => this._iframe.classList.add('loaded'));
 
 		if (!ObsidianBridge.isAndroidApp()) {
@@ -184,7 +200,7 @@ class PDFView {
 			this._iframeWindow.PDFViewerApplicationOptions.set('textLayerMode', this._preview ? 0 : 1);
 			this._iframeWindow.PDFViewerApplicationOptions.set('sidebarViewOnLoad', 0);
 			this._iframeWindow.PDFViewerApplicationOptions.set('ignoreDestinationZoom', true);
-			this._iframeWindow.PDFViewerApplicationOptions.set('renderInteractiveForms', false);
+			this._iframeWindow.PDFViewerApplicationOptions.set('annotationMode', 1);
 			this._iframeWindow.PDFViewerApplicationOptions.set('printResolution', 300);
 			this._iframeWindow.PDFViewerApplicationOptions.set('enableScripting', false);
 			this._iframeWindow.PDFViewerApplicationOptions.set('disablePreferences', true);
@@ -204,6 +220,10 @@ class PDFView {
 			this._updateColorScheme();
 			// This is necessary to make sure this is called after webviewerloaded
 			setTimeout(() => {
+				let handlePasswordRequest = (updateCallback) => {
+					this._passwordUpdateCallback = updateCallback;
+					this._onRequestPassword();
+				};
 				// Delete existing local history data
 				// TODO: This can be removed in future
 				try {
@@ -218,6 +238,7 @@ class PDFView {
 				}
 				setOptions();
 				this._iframeWindow.onDestroyPage = this._handlePageDestroy.bind(this);
+				this._iframeWindow.PDFViewerApplication.onPassword = handlePasswordRequest;
 				if (this._preview) {
 					// Necessary for view stats update
 					this._iframeWindow.PDFViewerApplication.eventBus.on('pagerendered', this._handlePageRendered.bind(this));
@@ -232,6 +253,9 @@ class PDFView {
 				else {
 					this._iframeWindow.PDFViewerApplication.open({ url: options.data.url, password: this._password });
 				}
+				if (this._iframeWindow.PDFViewerApplication.pdfLoadingTask) {
+					this._iframeWindow.PDFViewerApplication.pdfLoadingTask.onPassword = handlePasswordRequest;
+				}
 				window.PDFViewerApplication = this._iframeWindow.PDFViewerApplication;
 				window.if = this._iframeWindow;
 
@@ -241,6 +265,10 @@ class PDFView {
 					this._scrollTimeout = setTimeout(() => {
 						this._scrolling = false;
 					}, 100);
+
+					if (this._readAloudState?.active && !this._readAloudScrolling) {
+						this._onManualNavigation();
+					}
 
 
 					let x = event.target.scrollLeft;
@@ -283,6 +311,17 @@ class PDFView {
 		this._options.container.append(this._iframe);
 	}
 
+	enterPassword(password) {
+		this._password = password;
+		if (this._passwordUpdateCallback) {
+			let updateCallback = this._passwordUpdateCallback;
+			this._passwordUpdateCallback = null;
+			updateCallback(password);
+			return true;
+		}
+		return false;
+	}
+
 	async _init() {
 		// this._iframeWindow.document.body.draggable = true;
 
@@ -305,19 +344,23 @@ class PDFView {
 		this._iframeWindow.addEventListener('copy', this._handleCopy.bind(this), true);
 		this._iframeWindow.addEventListener('input', this._handleInput.bind(this));
 
+		this._iframeWindow.document.body.addEventListener('pointerleave', this._handlePointerLeave.bind(this));
+
 		this._dragCanvas = this._iframeWindow.document.createElement('canvas');
 		this._dragCanvas.style.position = 'absolute';
 		this._dragCanvas.style.left = '-100%';
 		this._iframeWindow.document.body.append(this._dragCanvas);
 
+		this._readAloudJumpButton = new ReadAloudJumpButton(this._iframeWindow.document, {
+			container: this._iframeWindow.document.getElementById('viewerContainer'),
+			title: this._options.getLocalizedString?.('reader-read-aloud'),
+			onClick: () => this._handleReadAloudJumpButtonClick(),
+		});
+		this._readAloudJumpButtonParagraph = null;
 
 		this._autoScroll = new AutoScroll({
 			container: this._iframeWindow.document.getElementById('viewerContainer')
 		});
-
-		this._iframeWindow.PDFViewerApplication.onPassword = () => {
-			this._onRequestPassword();
-		};
 
 		await this._iframeWindow.PDFViewerApplication.initializedPromise;
 		this._iframeWindow.PDFViewerApplication.eventBus.on('documentinit', this._handleDocumentInit.bind(this));
@@ -418,8 +461,43 @@ class PDFView {
 
 		this._resolveInitializedPromise();
 
+		if (this._mobile && this._primary) {
+			this._initNativeOutline();
+		}
+
 		await this._initProcessedData();
 		this._findController.setDocument(this._iframeWindow.PDFViewerApplication.pdfDocument);
+	}
+
+	async _initReadAloudSegments() {
+		if (this._readAloudSegmentsPromise) {
+			return this._readAloudSegmentsPromise;
+		}
+		let resolvePromise;
+		this._readAloudSegmentsPromise = new Promise(r => (resolvePromise = r));
+		let allParagraphs = [];
+		let allSentences = [];
+		let { pagesCount } = this._iframeWindow.PDFViewerApplication.pdfViewer;
+		for (let pageIndex = 0; pageIndex < pagesCount; pageIndex++) {
+			let pageData = await this._iframeWindow.PDFViewerApplication.pdfDocument.getPageData({ pageIndex });
+			let chars = pageData.chars;
+			if (!chars.length) {
+				continue;
+			}
+			let { paragraphs, sentences } = buildReadAloudSegments(chars, pageIndex);
+			let paragraphOffset = allParagraphs.length;
+			for (let sentence of sentences) {
+				sentence.paragraphIndex += paragraphOffset;
+			}
+			allParagraphs.push(...paragraphs);
+			allSentences.push(...sentences);
+		}
+		this._readAloudSegments = {
+			paragraphs: allParagraphs,
+			sentences: allSentences
+		};
+		resolvePromise();
+		return allParagraphs;
 	}
 
 	async _setState(state, skipScroll) {
@@ -483,10 +561,14 @@ class PDFView {
 		this._pdfThumbnails = new PDFThumbnails({
 			pdfView: this,
 			window: this._iframeWindow,
+			onInit: (thumbnails) => {
+				(this._onInitThumbnails || this._onSetThumbnails)(thumbnails);
+			},
 			onUpdate: (thumbnails) => {
 				// TODO: When rendering thumbnails it's also a good chance to getPageData with extracted pageLabel
 				this._onSetThumbnails(thumbnails);
-			}
+			},
+			onRender: this._onRenderThumbnail && ((thumbnail) => this._onRenderThumbnail(thumbnail))
 		});
 	}
 
@@ -643,12 +725,13 @@ class PDFView {
 		this._render();
 	}
 
-	_focusNext(side) {
+	_getVisibleObjects(objects) {
 		let visiblePages = this._iframeWindow.PDFViewerApplication.pdfViewer._getVisiblePages();
 		let visibleObjects = [];
 
 		let scrollY = this._iframeWindow.PDFViewerApplication.pdfViewer.scroll.lastY;
 		let scrollX = this._iframeWindow.PDFViewerApplication.pdfViewer.scroll.lastX;
+
 		for (let view of visiblePages.views) {
 			let visibleRect = [
 				scrollX,
@@ -659,27 +742,15 @@ class PDFView {
 
 			let pageIndex = view.id - 1;
 
-			let overlays = [];
-			let pdfPage = this._pdfPages[pageIndex];
-			if (pdfPage) {
-				overlays = pdfPage.overlays.filter(x => x.type !== 'reference');
-			}
-
-			let objects = [];
-
-			for (let annotation of this._annotations) {
-				if (annotation.position.pageIndex === pageIndex
-					|| annotation.position.nextPageRects && annotation.position.pageIndex + 1 === pageIndex) {
-					objects.push({ type: 'annotation', object: annotation });
-				}
-			}
-
-			for (let overlay of overlays) {
-				objects.push({ type: 'overlay', object: overlay });
-			}
-
 			for (let object of objects) {
-				let p = p2v(object.object.position, view.view.viewport, pageIndex);
+				let pos = object.object.position;
+				// Match objects that belong to this page (including spillover to next page)
+				if (!(pos.pageIndex === pageIndex
+					|| (pos.nextPageRects && pos.pageIndex + 1 === pageIndex))) {
+					continue;
+				}
+
+				let p = p2v(pos, view.view.viewport, pageIndex);
 				let br = getPositionBoundingRect(p, pageIndex);
 				let absoluteRect = [
 					view.x + br[0],
@@ -688,14 +759,43 @@ class PDFView {
 					view.y + br[3],
 				];
 
-				object.rect = absoluteRect;
-				object.pageIndex = pageIndex;
-
 				if (quickIntersectRect(absoluteRect, visibleRect)) {
+					object.pageIndex = pageIndex;
+					object.rect = absoluteRect;
 					visibleObjects.push(object);
 				}
 			}
 		}
+
+		return visibleObjects;
+	}
+
+	_focusNext(side) {
+		let visiblePages = this._iframeWindow.PDFViewerApplication.pdfViewer._getVisiblePages();
+
+		let scrollY = this._iframeWindow.PDFViewerApplication.pdfViewer.scroll.lastY;
+		let scrollX = this._iframeWindow.PDFViewerApplication.pdfViewer.scroll.lastX;
+
+		// Collect all candidate objects (annotations + overlays) with their positions
+		let objects = [];
+		for (let view of visiblePages.views) {
+			let pageIndex = view.id - 1;
+			let pdfPage = this._pdfPages[pageIndex];
+			let overlays = [];
+			if (pdfPage) {
+				overlays = pdfPage.overlays.filter(x => x.type !== 'reference');
+			}
+
+			for (let annotation of this._annotations) {
+				objects.push({ type: 'annotation', object: annotation, position: annotation.position });
+			}
+			for (let overlay of overlays) {
+				objects.push({ type: 'overlay', object: overlay, position: overlay.position });
+			}
+		}
+
+		// Extract objects visible in the viewport
+		let visibleObjects = this._getVisibleObjects(objects);
 
 		let nextObject;
 
@@ -772,6 +872,25 @@ class PDFView {
 		let scrollTop = element.scrollTop;
 		let scrollLeft = element.scrollLeft;
 
+		if (options.ifNeeded) {
+			let margin = options.visibilityMargin || 0;
+			let visibleRect = [
+				scrollLeft - margin,
+				scrollTop - margin,
+				scrollLeft + clientWidth + margin,
+				scrollTop + clientHeight + margin
+			];
+			let intersects = !(
+				rect[0] > visibleRect[2]
+				|| rect[2] < visibleRect[0]
+				|| rect[1] > visibleRect[3]
+				|| rect[3] < visibleRect[1]
+			);
+			if (intersects) {
+				return;
+			}
+		}
+
 		let x = rect[0];
 		let y = rect[1];
 
@@ -829,7 +948,7 @@ class PDFView {
 
 		// Build scroll options, only include axes that are defined
 		let scrollOptions = {
-			behavior: close ? 'smooth' : 'instant'
+			behavior: options.behavior || (close ? 'smooth' : 'instant')
 		};
 		if (typeof left === 'number') scrollOptions.left = left;
 		if (typeof top === 'number') scrollOptions.top = top;
@@ -852,6 +971,10 @@ class PDFView {
 		}
 	}
 
+	renderThumbnails(pageIndexes) {
+		this._pdfThumbnails?.render(pageIndexes);
+	}
+
 	setReadOnly(readOnly) {
 		this._readOnly = readOnly;
 	}
@@ -868,6 +991,7 @@ class PDFView {
 			this._iframeWindow.document.getElementById('viewerContainer').style.touchAction = tool.type !== 'pointer' ? 'none' : 'auto';
 		}
 		this._tool = tool;
+		this.updateCursor();
 	}
 
 	setAnnotations(annotations) {
@@ -927,6 +1051,334 @@ class PDFView {
 	setOverlayPopup(popup) {
 		this._overlayPopup = popup;
 		this._overlayPopupDelayer.setOpen(!!popup);
+	}
+
+	async setReadAloudState(state) {
+		let previousState = this._readAloudState;
+		this._readAloudState = state;
+
+		if (state.active && !previousState?.active) {
+			this._readAloudPositionLocked = true;
+		}
+
+		if (state.active && previousState?.paused && !state.paused
+			&& state.activeSegment?.position
+			&& this._isPositionInViewBounds(state.activeSegment.position)) {
+			this._readAloudPositionLocked = true;
+		}
+
+		if (!state.popupOpen) {
+			this._readAloudHighlightedPosition = null;
+			this._readAloudSentenceHighlightedPosition = null;
+			clearTimeout(this._readAloudSentenceTimeout);
+			this._hideReadAloudJumpButton();
+			this._render();
+			return;
+		}
+
+		if (state.activeSegment?.position) {
+			// Highlight the whole paragraph containing the active segment (matching dom-view behavior)
+			this._readAloudHighlightedPosition = this._getReadAloudParagraphPosition(state)
+				|| state.activeSegment.position;
+
+			// After a sentence skip, briefly highlight the active sentence segment
+			clearTimeout(this._readAloudSentenceTimeout);
+			if (state.lastSkipGranularity === 'sentence') {
+				this._readAloudSentenceHighlightedPosition = state.activeSegment.position;
+				this._readAloudSentenceTimeout = setTimeout(() => {
+					this._readAloudSentenceHighlightedPosition = null;
+					this._render();
+				}, 2000);
+			}
+			else {
+				this._readAloudSentenceHighlightedPosition = null;
+			}
+			this._render();
+
+			// If the Read Aloud annotation popup isn't open and position is locked, navigate to the current segment
+			if (!state.annotationPopup && this._readAloudPositionLocked) {
+				setTimeout(() => {
+					this._readAloudScrolling = true;
+					this.navigateToPosition(state.activeSegment.position, {
+						ifNeeded: true,
+						visibilityMargin: -this._iframeWindow.innerHeight / 4,
+						block: 'center',
+						behavior: 'smooth'
+					});
+
+					let viewerContainer = this._iframeWindow.document.getElementById('viewerContainer');
+					if (viewerContainer) {
+						debounceUntilScrollFinishes(viewerContainer).then(() => {
+							this._readAloudScrolling = false;
+						});
+					}
+					else {
+						this._readAloudScrolling = false;
+					}
+				});
+			}
+		}
+
+		await this._initReadAloudSegments();
+
+		if (!state.lang) {
+			let textSample = this._readAloudSegments.paragraphs
+				.slice(0, 25)
+				.map(p => p.text)
+				.join('\n');
+			this._options.onSetReadAloudState({
+				lang: detectLang(textSample) || 'en',
+			});
+			return;
+		}
+
+		if (!state.active || !state.segmentGranularity) {
+			return;
+		}
+
+		if (state.segments !== null && state.segmentGranularity === previousState?.segmentGranularity) {
+			return;
+		}
+
+		let segments = state.segmentGranularity === 'sentence'
+			? this._readAloudSegments.sentences
+			: this._readAloudSegments.paragraphs;
+
+		let backwardStopIndex = null;
+		let forwardStopIndex = null;
+
+		let selectionInfo = getReadAloudSelectionBounds(this._selectionRanges);
+		if (selectionInfo) {
+			await this._ensureBasicPageData(selectionInfo.start.pageIndex);
+			if (selectionInfo.end.pageIndex !== selectionInfo.start.pageIndex) {
+				await this._ensureBasicPageData(selectionInfo.end.pageIndex);
+			}
+
+			this._setSelectionRanges();
+
+			let split = splitReadAloudSegmentsBySelection(
+				segments,
+				selectionInfo.start,
+				selectionInfo.end,
+				pageIndex => this._pdfPages[pageIndex]?.chars
+			);
+
+			if (split) {
+				segments = split.segments;
+				backwardStopIndex = split.startIndex;
+				forwardStopIndex = split.endIndex;
+			}
+			else if (selectionInfo.selectionRanges.length) {
+				let selectionSegments = { paragraphs: [], sentences: [] };
+
+				for (let selectionRange of selectionInfo.selectionRanges) {
+					let { pageIndex } = selectionRange.position;
+					await this._ensureBasicPageData(pageIndex);
+					let page = this._pdfPages[pageIndex];
+					if (!page?.chars?.length) {
+						continue;
+					}
+					let { chars } = page;
+					let start = Math.min(selectionRange.anchorOffset, selectionRange.headOffset);
+					let end = Math.max(selectionRange.anchorOffset, selectionRange.headOffset);
+
+					let { paragraphs, sentences } = buildReadAloudSegmentsFromRanges(
+						chars, pageIndex, [[start, end - 1]]
+					);
+
+					let paragraphOffset = selectionSegments.paragraphs.length;
+					for (let sentence of sentences) {
+						sentence.paragraphIndex += paragraphOffset;
+					}
+
+					selectionSegments.paragraphs.push(...paragraphs);
+					selectionSegments.sentences.push(...sentences);
+				}
+
+				segments = state.segmentGranularity === 'sentence'
+					? selectionSegments.sentences
+					: selectionSegments.paragraphs;
+				if (segments.length) {
+					backwardStopIndex = 0;
+					forwardStopIndex = segments.length;
+				}
+			}
+		}
+		else if (state.targetPosition) {
+			for (let i = 0; i < segments.length; i++) {
+				let segment = segments[i];
+				if (segment.position.pageIndex === state.targetPosition.pageIndex
+					&& intersectAnnotationWithPoint(segment.position, state.targetPosition)) {
+					backwardStopIndex = i;
+					break;
+				}
+			}
+		}
+		else {
+			let objects = segments.map((object, index) => ({ index, object }));
+			let visibleObjects = this._getVisibleObjects(objects);
+			if (visibleObjects.length) {
+				backwardStopIndex = visibleObjects[0].index;
+			}
+		}
+
+		this._options.onSetReadAloudState({
+			segments,
+			backwardStopIndex,
+			forwardStopIndex,
+		});
+	}
+
+	_getReadAloudParagraphPosition(state) {
+		if (!state.activeSegment?.position) {
+			return null;
+		}
+
+		let pageIndex = state.activeSegment.position.pageIndex;
+		let paragraphPosition = null;
+
+		if (state.segmentGranularity === 'sentence') {
+			let paragraphIndex = state.activeSegment.paragraphIndex;
+			let paragraph = Number.isInteger(paragraphIndex)
+				? this._readAloudSegments?.paragraphs?.[paragraphIndex]
+				: null;
+			if (paragraph?.position?.rects?.length && paragraph.position.pageIndex === pageIndex) {
+				paragraphPosition = paragraph.position;
+			}
+		}
+		else if (state.segmentGranularity === 'paragraph') {
+			paragraphPosition = state.activeSegment.position;
+		}
+
+		if (paragraphPosition) {
+			return paragraphPosition;
+		}
+
+		let segments = state.segments || [];
+		let activeIndex = segments.indexOf(state.activeSegment);
+		if (activeIndex === -1) {
+			return null;
+		}
+
+		// Find paragraph boundaries using anchor === 'paragraphStart'
+		let paragraphStartIndex = activeIndex;
+		for (let i = activeIndex; i >= 0; i--) {
+			paragraphStartIndex = i;
+			if (segments[i].anchor === 'paragraphStart') {
+				break;
+			}
+		}
+		let paragraphEndIndex = activeIndex;
+		for (let i = activeIndex + 1; i < segments.length; i++) {
+			if (segments[i].anchor === 'paragraphStart') {
+				break;
+			}
+			paragraphEndIndex = i;
+		}
+
+		// Combine positions of all segments in the paragraph
+		let paragraphRects = [];
+		for (let i = paragraphStartIndex; i <= paragraphEndIndex; i++) {
+			let seg = segments[i];
+			if (seg.position.pageIndex === pageIndex && seg.position.rects) {
+				paragraphRects.push(...seg.position.rects);
+			}
+		}
+
+		if (!paragraphRects.length) {
+			return null;
+		}
+
+		return { pageIndex, rects: paragraphRects };
+	}
+
+	computeReadAloudRepositionIndex(position, segments) {
+		for (let i = 0; i < segments.length; i++) {
+			let segment = segments[i];
+			if (segment.position.pageIndex === position.pageIndex
+					&& intersectAnnotationWithPoint(segment.position, position)) {
+				return i;
+			}
+		}
+		return null;
+	}
+
+	get hasReadAloudTarget() {
+		return this._selectionRanges.length && !this._selectionRanges[0].collapsed;
+	}
+
+	lockPositionToReadAloud() {
+		this._readAloudPositionLocked = true;
+	}
+
+	getSerializableReadAloudPosition(position) {
+		return position;
+	}
+
+	isReadAloudPositionTooFar(savedPosition, viewState) {
+		if (savedPosition.pageIndex === undefined) {
+			return false;
+		}
+		return Math.abs(viewState.pageIndex - savedPosition.pageIndex) > 2;
+	}
+
+	_isPositionInViewBounds(position) {
+		let viewerContainer = this._iframeWindow?.document.getElementById('viewerContainer');
+		if (!viewerContainer) {
+			return false;
+		}
+
+		let rect = this.getPositionBoundingViewRect(position);
+		let visibleRect = [
+			viewerContainer.scrollLeft,
+			viewerContainer.scrollTop,
+			viewerContainer.scrollLeft + viewerContainer.clientWidth,
+			viewerContainer.scrollTop + viewerContainer.clientHeight
+		];
+
+		return quickIntersectRect(rect, visibleRect);
+	}
+
+	addAnnotationFromReadAloudSegments(segments, init) {
+		if (!segments.length) {
+			return undefined;
+		}
+		let firstSegment = segments[0];
+		let rects = [];
+		let nextPageRects = [];
+		let texts = [];
+		let pageIndex = firstSegment.position.pageIndex;
+		let nextPageIndex = pageIndex + 1;
+
+		for (let segment of segments) {
+			texts.push(segment.text);
+			if (segment.position.pageIndex === pageIndex) {
+				rects.push(...segment.position.rects);
+			}
+			else if (segment.position.pageIndex === nextPageIndex) {
+				nextPageRects.push(...segment.position.rects);
+			}
+			else {
+				break;
+			}
+		}
+
+		let position = {
+			pageIndex,
+			rects,
+		};
+		if (nextPageRects.length) {
+			position.nextPageRects = nextPageRects;
+		}
+
+		let annotation = {
+			pageLabel: this._getPageLabel(pageIndex, true),
+			sortIndex: getSortIndex(this._pdfPages, position),
+			position,
+			text: texts.join(' '), // TODO: Is this always right?
+			...init,
+		};
+		return this._onAddAnnotation(annotation);
 	}
 
 	setFindState(state) {
@@ -1129,8 +1581,72 @@ class PDFView {
 		}, 2000);
 	}
 
+	_onManualNavigation() {
+		if (this._readAloudState?.active) {
+			this._readAloudPositionLocked = false;
+		}
+	}
+
+	_updateReadAloudJumpButton(position) {
+		if (!this._readAloudState?.popupOpen || !this._readAloudSegments?.paragraphs || !position) {
+			return;
+		}
+
+		let paragraph = null;
+		for (let p of this._readAloudSegments.paragraphs) {
+			if (p.position.pageIndex !== position.pageIndex) continue;
+			if (intersectAnnotationWithPoint(p.position, position)) {
+				paragraph = p;
+				break;
+			}
+		}
+
+		if (!paragraph || paragraph === this._readAloudJumpButtonParagraph) {
+			return;
+		}
+
+		this._readAloudJumpButtonParagraph = paragraph;
+		let paraRect = getPositionBoundingRect(paragraph.position);
+		let clientRect = this.getClientRect(paraRect, paragraph.position.pageIndex);
+		let container = this._iframeWindow.document.getElementById('viewerContainer');
+		let containerRect = container.getBoundingClientRect();
+
+		let width = clientRect[0] - containerRect.left;
+		let height = clientRect[3] - clientRect[1];
+		this._readAloudJumpButton.show({
+			marginWidth: `${width}px`,
+			top: `${clientRect[1] - containerRect.top + container.scrollTop}px`,
+			height: `${Math.max(height, 20)}px`,
+		});
+	}
+
+	_hideReadAloudJumpButton() {
+		this._readAloudJumpButton.hide();
+		this._readAloudJumpButtonParagraph = null;
+	}
+
+	_handleReadAloudJumpButtonClick() {
+		if (!this._readAloudJumpButtonParagraph || !this._readAloudState) return;
+
+		let paragraph = this._readAloudJumpButtonParagraph;
+
+		// Immediately move the highlight to the target paragraph
+		this._readAloudHighlightedPosition = paragraph.position;
+		this._render();
+
+		this._options.onSetReadAloudState({
+			targetPosition: {
+				pageIndex: paragraph.position.pageIndex,
+				rects: paragraph.position.rects,
+			},
+		});
+	}
+
 	async navigate(location, options = {}) {
 		options.block ||= 'center';
+		if (!options.skipHistory) {
+			this._onManualNavigation();
+		}
 		this._lastNavigationTime = Date.now();
 		if (location.annotationID && this._annotations.find(x => x.id === location.annotationID)) {
 			let annotation = this._annotations.find(x => x.id === location.annotationID);
@@ -1174,26 +1690,32 @@ class PDFView {
 	}
 
 	navigateBack() {
+		this._onManualNavigation();
 		this._history.navigateBack();
 	}
 
 	navigateForward() {
+		this._onManualNavigation();
 		this._history.navigateForward();
 	}
 
 	navigateToNextPage() {
+		this._onManualNavigation();
 		this._iframeWindow.PDFViewerApplication.pdfViewer.nextPage();
 	}
 
 	navigateToPreviousPage() {
+		this._onManualNavigation();
 		this._iframeWindow.PDFViewerApplication.pdfViewer.previousPage();
 	}
 
 	navigateToFirstPage() {
+		this._onManualNavigation();
 		this._iframeWindow.PDFViewerApplication.eventBus.dispatch('firstpage');
 	}
 
 	navigateToLastPage() {
+		this._onManualNavigation();
 		this._iframeWindow.PDFViewerApplication.eventBus.dispatch('lastpage');
 	}
 
@@ -1811,8 +2333,10 @@ class PDFView {
 	}
 
 	updateCursor(action) {
-		let cursor = 'default';
-		if (action) {
+		let cursor = this._tool.type === 'hand'
+			? (this.pointerDownPosition ? 'grabbing' : 'grab')
+			: 'default';
+		if (action && this._tool.type !== 'hand') {
 			if (action.type === 'overlay') {
 				cursor = 'pointer';
 			}
@@ -1957,6 +2481,7 @@ class PDFView {
 
 		this.action = action;
 		this.pointerDownPosition = position;
+		this.updateCursor(action);
 		// Select text, and/or object, otherwise unselect
 
 		if (selectAnnotations && !(selectAnnotations.length === 0 && this._selectedAnnotationIDs.length === 0)) {
@@ -2197,6 +2722,7 @@ class PDFView {
 			else {
 				this.updateCursor();
 			}
+			this._updateReadAloudJumpButton(position, event);
 			this._render();
 			return;
 		}
@@ -2795,6 +3321,15 @@ class PDFView {
 				if (position) {
 					overlay = this._getSelectableOverlay(position);
 				}
+
+				let textPosition;
+				if (position) {
+					let selectionRanges = getWordSelectionRanges(this._pdfPages, position, position);
+					if (selectionRanges.length && !selectionRanges[0].collapsed) {
+						textPosition = selectionRanges[0].position;
+					}
+				}
+
 				// If this is a keyboard contextmenu event, its position won't take our
 				// text selection into account since we don't use browser selection APIs.
 				// Position the menu manually.
@@ -2804,11 +3339,17 @@ class PDFView {
 					this._onOpenViewContextMenu({
 						x: br.x + selectionBoundingRect[0],
 						y: br.y + selectionBoundingRect[3] + EXTRA_VERTICAL_PADDING,
-						overlay
+						overlay,
+						position: textPosition
 					});
 				}
 				else {
-					this._onOpenViewContextMenu({ x: br.x + event.clientX, y: br.y + event.clientY, overlay });
+					this._onOpenViewContextMenu({
+						x: br.x + event.clientX,
+						y: br.y + event.clientY,
+						overlay,
+						position: textPosition
+					});
 				}
 			}
 			else if (!selectedAnnotations.includes(selectableAnnotation) && !this._textAnnotationFocused()) {
@@ -2863,7 +3404,7 @@ class PDFView {
 		else if (key === 'r') {
 			event.stopPropagation();
 		}
-		else if (['n', 'j', 'p', 'k'].includes(key)) {
+		else if (['n', 'j', 'p', 'k', 'h', 's'].includes(key)) {
 			event.stopPropagation();
 		}
 		// This is necessary when a page is zoomed in and left/right arrow keys can't change page
@@ -2877,7 +3418,7 @@ class PDFView {
 			event.stopPropagation();
 			event.preventDefault();
 		}
-		else if (key.startsWith('Shift') && this._selectionRanges.length) {
+		else if (['Shift-ArrowLeft', 'Shift-ArrowRight', 'Shift-ArrowUp', 'Shift-ArrowDown'].includes(key) && this._selectionRanges.length) {
 			// Prevent browser doing its own text selection
 			event.stopPropagation();
 			event.preventDefault();
@@ -3569,6 +4110,11 @@ class PDFView {
 		}
 	}
 
+	_handlePointerLeave() {
+		this._readAloudJumpButton.hide();
+		this._readAloudJumpButtonParagraph = null;
+	}
+
 	getDragMultiIcon() {
 		let canvas = this._dragCanvas;
 
@@ -3588,7 +4134,8 @@ class PDFView {
 	}
 
 	pointerEventToPosition(event) {
-		let target = this._iframeWindow.document.elementFromPoint(event.clientX, event.clientY);
+		let targets = this._iframeWindow.document.elementsFromPoint(event.clientX, event.clientY);
+		let target = targets.find(t => t.closest('.page'));
 		if (!target) {
 			return null;
 		}
@@ -3659,6 +4206,47 @@ class PDFView {
 		}
 	}
 
+	async _initNativeOutline() {
+		await this._iframeWindow.PDFViewerApplication.pdfViewer.pagesPromise;
+		let outline = await this._iframeWindow.PDFViewerApplication.pdfDocument.getOutline();
+		outline = await this._transformNativeOutline(outline || []);
+		this._onSetOutline(outline);
+	}
+
+	async _transformNativeOutline(items) {
+		let outline = [];
+		for (let item of items) {
+			let newItem = {
+				title: item.title,
+				items: await this._transformNativeOutline(item.items || []),
+			};
+			if (item.dest) {
+				try {
+					let position = await this._getPositionFromDestination(item.dest);
+					if (position) {
+						newItem.location = {
+							position: {
+								pageIndex: position.pageIndex,
+								rects: [[position.x, position.y, position.x, position.y]]
+							}
+						};
+					}
+				}
+				catch (e) {
+					console.log(e);
+				}
+			}
+			else if (item.unsafeUrl) {
+				newItem.url = item.unsafeUrl;
+			}
+			outline.push(newItem);
+		}
+		if (outline.length === 1 && outline[0].items.length > 1) {
+			outline = outline[0].items;
+		}
+		return outline;
+	}
+
 	setOutline(outline) {
 		this._outline = outline;
 	}
@@ -3683,17 +4271,27 @@ class PDFView {
 		}
 
 		const ref = destArray[0];
-		const pageNumber = await pdfDocument.getPageIndex(ref) + 1;
-
-		const pageView = this._iframeWindow.PDFViewerApplication.pdfViewer.getPageView(pageNumber - 1);
-		if (!pageView) {
-			throw new Error(`"${pageNumber}" is not a valid pageNumber.`);
+		let pageIndex;
+		if (ref && typeof ref === 'object') {
+			pageIndex = await pdfDocument.getPageIndex(ref);
 		}
+		else if (Number.isInteger(ref)) {
+			pageIndex = ref;
+			if (pageIndex < 0 || pageIndex > pdfDocument.numPages - 1) {
+				throw new Error(`"${pageIndex}" is not a valid page index.`);
+			}
+		}
+		else {
+			throw new Error(`Invalid destination: "${dest}"`);
+		}
+		const pageNumber = pageIndex + 1;
 
 		let x = 0, y = 0;
-		const changeOrientation = pageView.rotation % 180 !== 0;
-		const PixelsPerInch = { PDF_TO_CSS_UNITS: 96 / 72 }; // Assuming default values here
-		const pageHeight = (changeOrientation ? pageView.width : pageView.height) / pageView.scale / PixelsPerInch.PDF_TO_CSS_UNITS;
+		const { rotate, view } = await pdfDocument.getPage(pageNumber);
+		const width = view[2] - view[0];
+		const height = view[3] - view[1];
+		const changeOrientation = rotate % 180 !== 0;
+		const pageHeight = changeOrientation ? width : height;
 
 		switch (destArray[1].name) {
 			case "XYZ":
@@ -3702,6 +4300,7 @@ class PDFView {
 				break;
 			case "Fit":
 			case "FitB":
+				y = pageHeight;
 				break;
 			case "FitH":
 			case "FitBH":
@@ -3710,15 +4309,22 @@ class PDFView {
 			case "FitV":
 			case "FitBV":
 				x = destArray[2] !== null ? destArray[2] : 0;
+				y = pageHeight;
 				break;
 			case "FitR":
-				x = destArray[2];
-				y = destArray[5];
+				x = destArray[2] !== null ? destArray[2] : 0;
+				y = destArray[5] !== null ? destArray[5] : pageHeight;
 				break;
 			default:
 				console.error(`"${destArray[1].name}" is not a valid destination type.`);
 				return;
 		}
+
+		x = Math.max(view[0], x);
+		x = Math.min(view[2], x);
+
+		y = Math.max(view[1], y);
+		y = Math.min(view[3], y);
 
 		return {
 			pageIndex: pageNumber - 1,

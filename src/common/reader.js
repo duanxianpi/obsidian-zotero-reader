@@ -8,6 +8,7 @@ import AnnotationManager from './annotation-manager';
 import {
 	createAnnotationContextMenu,
 	createColorContextMenu,
+	createReadAloudAnnotationContextMenu,
 	createSelectorContextMenu,
 	createThemeContextMenu,
 	createThumbnailContextMenu,
@@ -18,13 +19,18 @@ import { ANNOTATION_COLORS, DEBOUNCE_STATE_CHANGE, DEBOUNCE_STATS_CHANGE, DEFAUL
 import { FocusManager } from './focus-manager';
 import { KeyboardManager } from './keyboard-manager';
 import {
+	basicDeepEqual,
 	getCurrentColorScheme,
-	getImageDataURL, isMac,
+	getImageDataURL,
+	isMac,
 	setMultiDragPreview,
 } from './lib/utilities';
 import { debounce } from './lib/debounce';
 import { flushSync } from 'react-dom';
 import { addFTL, getLocalizedString } from '../fluent';
+import { getVoicePreferencesURL } from './lib/read-aloud-links';
+import { resolveLanguage } from './read-aloud/lang';
+import { ReadAloudManager } from './read-aloud/manager';
 
 // Compute style values for usage in views (CSS variables aren't sufficient for that)
 // Font family is necessary for text annotations
@@ -73,11 +79,14 @@ class Reader {
 		// Only used on Zotero client, sets text/plain and text/html values from Note Markdown and Note HTML translators
 		this._onSetDataTransferAnnotations = options.onSetDataTransferAnnotations;
 		this._onSetZoom = options.onSetZoom;
+		this._onSetReadAloudVoice = options.onSetReadAloudVoice;
+		this._onSetReadAloudStatus = options.onSetReadAloudStatus;
+		this._onPurchaseReadAloudCredits = options.onPurchaseReadAloudCredits;
+		this._onLogIn = options.onLogIn;
+		this._onOpenReadAloudFirstRunPopup = options.onOpenReadAloudFirstRunPopup;
 
-		if (Array.isArray(options.ftl)) {
-			for (let ftl of options.ftl) {
-				addFTL(ftl);
-			}
+		for (let ftl of options.ftl) {
+			addFTL(ftl);
 		}
 
 		this._readerRef = React.createRef();
@@ -93,6 +102,8 @@ class Reader {
 
 		this._enableAnnotationDeletionFromComment = false;
 		this._annotationSelectionTriggeredFromView = false;
+		this._lastReadAloudPaused = true;
+		this._lastReadAloudActiveSegment = null;
 
 		// Stores the default or current values for each annotation type
 		this._tools = {
@@ -141,6 +152,30 @@ class Reader {
 			? DEFAULT_THEMES.find(x => x.id === 'dark')
 			: themes.get(options.darkTheme) || null;
 
+		// Initialize speech synthesis (for Chrome, which only returns voices
+		// the second time this is called)
+		window.speechSynthesis.getVoices();
+
+		this._enableReadAloud = options.enableReadAloud || false;
+		this._readAloudRemoteInterface = options.readAloudRemoteInterface || null;
+
+		this._readAloudManager = new ReadAloudManager({
+			remoteInterface: this._readAloudRemoteInterface,
+			onStateChange: () => this._onReadAloudEngineStateChanged(),
+			onRequestSegments: () => {
+				// Push composed view state to views. The view will see
+				// segments == null along with segmentGranularity, compute segments,
+				// and feed them back via onSetReadAloudState(), which calls setSegments().
+				this._pushReadAloudToViews();
+			},
+			onComputeRepositionIndex: (position) => {
+				let segments = this._readAloudManager.segments;
+				if (!segments || !this._primaryView) return null;
+				return this._primaryView.computeReadAloudRepositionIndex(position, segments);
+			},
+			onSetVoice: data => this._setReadAloudVoice(data),
+		});
+
 		this._state = {
 			splitType: null,
 			splitSize: '50%',
@@ -157,6 +192,8 @@ class Reader {
 			},
 			readOnly: options.readOnly !== undefined ? options.readOnly : false,
 			authorName: typeof options.authorName === 'string' ? options.authorName : '',
+			title: options.title || '',
+			loggedIn: options.loggedIn ?? false,
 			fontSize: options.fontSize || 1,
 			fontFamily: options.fontFamily,
 			hyphenate: options.hyphenate,
@@ -188,6 +225,14 @@ class Reader {
 			appearancePopup: null,
 			themePopup: null,
 			contextMenu: null,
+			readAloudState: {
+				popupOpen: false,
+				annotationPopup: null,
+				segmentAnnotations: new Map(),
+				savedPosition: options.primaryViewState?.lastReadAloudPosition ?? null,
+			},
+			readAloudVoices: new Map(Object.entries(options.readAloudVoices || {})),
+			readAloudFirstRunPopup: false,
 			primaryViewState: options.primaryViewState,
 			primaryViewStats: {},
 			primaryViewAnnotationPopup: null,
@@ -302,6 +347,15 @@ class Reader {
 						onChangePageIndex={(pageIndex, options) => this._lastView.navigate({ pageIndex }, options)}
 						onChangeTool={this.setTool.bind(this)}
 						onToggleAppearancePopup={this.toggleAppearancePopup.bind(this)}
+						enableReadAloud={this._enableReadAloud}
+						readAloudManager={this._readAloudManager}
+						readAloudRemoteInterface={this._readAloudRemoteInterface}
+						onSetReadAloudVoice={this._setReadAloudVoice.bind(this)}
+						onOpenVoicePreferences={this.openVoicePreferences.bind(this)}
+						onPurchaseReadAloudCredits={this._onPurchaseReadAloudCredits}
+						onToggleReadAloud={this.toggleReadAloudPopup.bind(this)}
+						onAddReadAloudAnnotation={this.addAnnotationFromReadAloudSegment.bind(this)}
+						onLockReadAloudPosition={this._lockPositionToReadAloud.bind(this)}
 						onToggleFind={this.toggleFindPopup.bind(this)}
 						onChangeFilter={this.setFilter.bind(this)}
 						onChangeSidebarView={(view) => {
@@ -412,6 +466,11 @@ class Reader {
 							}
 							this._updateState({ themePopup: null, customThemes, lightTheme, darkTheme });
 						}}
+						onLogIn={this._onLogIn}
+						onMoveReadAloudAnnotation={this.moveReadAloudAnnotation.bind(this)}
+						onDismissReadAloudAnnotationPopup={this.dismissReadAloudAnnotationPopup.bind(this)}
+						onDeleteReadAloudAnnotation={this.deleteReadAloudAnnotation.bind(this)}
+						onOpenReadAloudAnnotationContextMenu={params => this._onOpenContextMenu(createReadAloudAnnotationContextMenu(this, params))}
 					/>
 				</ReaderContext.Provider>
 			);
@@ -500,6 +559,23 @@ class Reader {
 			if (!init) {
 				this._primaryView?.setColorScheme(this._state.colorScheme);
 				this._secondaryView?.setColorScheme(this._state.colorScheme);
+			}
+		}
+
+		if (this._state.readAloudState !== previousState.readAloudState) {
+			// Push composed view state (from manager + UI state) to views
+			this._pushReadAloudToViews();
+
+			// If the first-run popup should be shown and we have an external handler,
+			// call it instead of rendering the inline popup
+			if (this._onOpenReadAloudFirstRunPopup
+					&& this._state.readAloudFirstRunPopup
+					&& this._state.readAloudState.popupOpen
+					&& this._state.readAloudState.lang) {
+				this._onOpenReadAloudFirstRunPopup({
+					lang: this._state.readAloudState.lang,
+				});
+				this.toggleReadAloudPopup(false);
 			}
 		}
 
@@ -748,6 +824,9 @@ class Reader {
 			window.focus();
 			document.activeElement.blur();
 		});
+		return new Promise((resolve) => {
+			this._contextMenuCloseResolve = resolve;
+		});
 	}
 
 	closeContextMenu() {
@@ -755,6 +834,16 @@ class Reader {
 		this._focusManager.restoreFocus();
 		this._onBringReaderToFront?.(false);
 		document.querySelectorAll('.context-menu-open').forEach(x => x.classList.remove('context-menu-open'));
+		this._contextMenuCloseResolve?.();
+		this._contextMenuCloseResolve = null;
+	}
+
+	/**
+	 * @returns {Object | null}
+	 */
+	getSelectionPosition() {
+		return this._state[this._lastViewPrimary ? 'primaryViewSelectionPopup' : 'secondaryViewSelectionPopup']
+			?.annotation?.position ?? null;
 	}
 
 	_handleAppearanceChange(params) {
@@ -835,6 +924,464 @@ class Reader {
 		}
 	}
 
+	/**
+	 * Update UI-only Read Aloud state (popupOpen, annotationPopup, etc.)
+	 * and push the composed view state to views.
+	 */
+	_updateReadAloudUIState(state) {
+		// Ignore late changes due to event handlers after popup has closed
+		if (!this._state.readAloudState.popupOpen && !state.popupOpen) {
+			return;
+		}
+		this._updateState({ readAloudState: { ...this._state.readAloudState, ...state } });
+	}
+
+	/**
+	 * Called when the manager's engine state changes.
+	 * Pushes composed view state to views, updates savedPosition,
+	 * reports status to Zotero, and triggers a React re-render.
+	 */
+	_onReadAloudEngineStateChanged() {
+		let manager = this._readAloudManager;
+
+		// Auto-activate once a voice is resolved and the popup is open
+		// (but not during first-run, where the user picks a tier first)
+		if (this._state.readAloudState.popupOpen
+				&& !this._state.readAloudFirstRunPopup
+				&& manager.selectedVoiceID
+				&& !manager.active) {
+			manager.activate();
+			return;
+		}
+
+		// If the view has a selection target and we're unpausing, reset segments
+		// so they'll be recomputed from the selection
+		if (!manager.paused && this._lastReadAloudPaused
+				&& this._primaryView?.hasReadAloudTarget) {
+			manager.clearSegments();
+		}
+		this._lastReadAloudPaused = manager.paused;
+
+		// Update savedPosition when the active segment changes
+		let activeSegment = manager.activeSegment;
+		if (activeSegment && activeSegment !== this._lastReadAloudActiveSegment) {
+			let savedPosition = activeSegment.position;
+			if (this._primaryView) {
+				savedPosition = this._primaryView.getSerializableReadAloudPosition(savedPosition);
+			}
+			this._state.readAloudState.savedPosition = savedPosition;
+		}
+		this._lastReadAloudActiveSegment = activeSegment;
+
+		// Report active/paused status to Zotero
+		let status = { active: manager.active, paused: manager.paused };
+		if (!basicDeepEqual(status, this._lastReadAloudStatus)) {
+			this._lastReadAloudStatus = status;
+			this._onSetReadAloudStatus?.(status);
+		}
+
+		// Trigger React re-render so the popup reads fresh manager state.
+		// Spread creates a new reference without changing content.
+		this._updateState({
+			readAloudState: { ...this._state.readAloudState },
+		});
+	}
+
+	/**
+	 * Compose a ReadAloudStateSnapshot from manager + UI state, and push to views.
+	 */
+	_pushReadAloudToViews() {
+		let stateSnapshot = this._composeReadAloudStateSnapshot();
+		this._primaryView?.setReadAloudState(stateSnapshot);
+		this._secondaryView?.setReadAloudState(stateSnapshot);
+	}
+
+	_composeReadAloudStateSnapshot() {
+		let manager = this._readAloudManager;
+		return {
+			popupOpen: this._state.readAloudState.popupOpen,
+			active: manager.active,
+			paused: manager.paused,
+			segmentGranularity: manager.segmentGranularity,
+			segments: manager.segments,
+			activeSegment: manager.activeSegment,
+			backwardStopIndex: null,
+			forwardStopIndex: null,
+			targetPosition: manager.consumeTargetPosition(),
+			lastSkipGranularity: manager.lastSkipGranularity,
+			annotationPopup: this._state.readAloudState.annotationPopup,
+			lang: manager.lang || this._state.readAloudState.lang,
+		};
+	}
+
+	_syncPersistedVoicesToManager() {
+		let manager = this._readAloudManager;
+		let lang = manager.lang;
+		if (!lang) return;
+		let resolvedLang = resolveLanguage(lang, [...this._state.readAloudVoices.keys()]);
+		let persisted = resolvedLang ? this._state.readAloudVoices.get(resolvedLang) : {};
+		manager.applyPersistedVoices(persisted || {});
+		if (persisted?.speed) {
+			manager.setSpeed(persisted.speed);
+		}
+	}
+
+	_resetReadAloudSegmentState() {
+		this._state.readAloudState.segmentAnnotations = new Map();
+	}
+
+	_lockPositionToReadAloud() {
+		this._lastView?.lockPositionToReadAloud();
+	}
+
+	openVoicePreferences() {
+		let url = getVoicePreferencesURL();
+		if (url) {
+			this._onOpenLink(url);
+		}
+	}
+
+	toggleReadAloudPopup(popupOpen) {
+		if (!this._enableReadAloud) {
+			return;
+		}
+		if (popupOpen === undefined) {
+			popupOpen = !this._state.readAloudState.popupOpen;
+		}
+		if (popupOpen) {
+			this._updateState({
+				readAloudFirstRunPopup: !this._state.readAloudVoices.size,
+			});
+			this._updateReadAloudUIState({
+				popupOpen: true,
+			});
+			this._readAloudManager.loadVoices(this._state.loggedIn);
+			this._syncPersistedVoicesToManager();
+		}
+		else {
+			this._readAloudManager.deactivate();
+			this._resetReadAloudSegmentState();
+			this._updateState({
+				readAloudFirstRunPopup: false,
+			});
+			this._updateReadAloudUIState({
+				popupOpen: false,
+				annotationPopup: null,
+			});
+		}
+	}
+
+	toggleReadAloudPaused(paused = undefined) {
+		if (!this._enableReadAloud) {
+			return;
+		}
+		if (!this._readAloudManager.active) {
+			return;
+		}
+		if (paused === undefined) {
+			paused = !this._readAloudManager.paused;
+		}
+		if (!paused) {
+			this._lockPositionToReadAloud();
+		}
+		if (paused) {
+			this._readAloudManager.pause();
+		}
+		else {
+			this._readAloudManager.play();
+		}
+	}
+
+	startReadAloudAtPosition(position = null) {
+		if (!this._enableReadAloud) {
+			return;
+		}
+		position ||= this.getSelectionPosition();
+		// If already active with segments, jump
+		if (this._readAloudManager.active && this._readAloudManager.segments) {
+			this._lockPositionToReadAloud();
+			if (position) {
+				this._readAloudManager.jumpTo(position);
+			}
+			else {
+				this._readAloudManager.play();
+			}
+		}
+		else {
+			// Not yet active: Open popup and start with target position.
+			// Store targetPosition on the manager so it's included when
+			// the view state is composed for initial segment computation.
+			this._readAloudManager.setTargetPosition(position);
+			if (this._state.readAloudState.savedPosition && !position) {
+				this._readAloudManager.setTargetPosition(this._state.readAloudState.savedPosition);
+			}
+			this._resetReadAloudSegmentState();
+			this._updateReadAloudUIState({ popupOpen: true });
+			this._readAloudManager.loadVoices(this._state.loggedIn);
+			this._syncPersistedVoicesToManager();
+		}
+	}
+
+	_setReadAloudVoice({ lang, region, voice, speed, tier }) {
+		this._onSetReadAloudVoice({ lang, region, voice, speed, tier });
+		let existing = this._state.readAloudVoices.get(lang) || {};
+		let tierVoices = { ...existing.tierVoices };
+		if (tier) {
+			// Push to the end of the object
+			delete tierVoices[tier];
+			tierVoices[tier] = voice;
+		}
+		this._updateState({
+			readAloudFirstRunPopup: false,
+			readAloudVoices: new Map([
+				...this._state.readAloudVoices,
+				[lang, { region, voice, speed, tierVoices }],
+			]),
+			readAloudState: {
+				...this._state.readAloudState,
+				lang,
+			},
+		});
+		// If the manager isn't active yet (first-run popup flow), sync
+		// persisted voices so it can resolve, then activate.
+		// When already active, the manager already has the right voice --
+		// don't re-sync (which would nuke and recreate the controller).
+		if (!this._readAloudManager.active) {
+			this._readAloudManager.setLanguage(lang);
+			this._syncPersistedVoicesToManager();
+			if (this._readAloudManager.selectedVoiceID) {
+				this._readAloudManager.activate();
+			}
+		}
+	}
+
+	setReadAloudVoices(readAloudVoices) {
+		this._updateState({ readAloudVoices: new Map(Object.entries(readAloudVoices)) });
+	}
+
+	addAnnotationFromReadAloudSegment(segment, type) {
+		let { annotationPopup: popup, segmentAnnotations } = this._state.readAloudState;
+		let segments = this._readAloudManager.segments;
+		// If the annotation popup is already open, just change the type if specified
+		if (popup) {
+			if (type) {
+				this.setReadAloudAnnotationType(type);
+			}
+			return;
+		}
+
+		let segmentIndex = segments ? segments.indexOf(segment) : -1;
+		// Check if this segment already has an annotation
+		let existingAnnotationID = segmentAnnotations.get(segmentIndex);
+		let existingAnnotation = existingAnnotationID && this._annotationManager._getAnnotationByID(existingAnnotationID);
+
+		if (existingAnnotation) {
+			// Find the segment range for this annotation
+			let startSegmentIndex = segmentIndex;
+			let endSegmentIndex = segmentIndex;
+			for (let [idx, annID] of segmentAnnotations) {
+				if (annID === existingAnnotationID) {
+					startSegmentIndex = Math.min(startSegmentIndex, idx);
+					endSegmentIndex = Math.max(endSegmentIndex, idx);
+				}
+			}
+			this._updateReadAloudUIState({
+				annotationPopup: {
+					annotation: existingAnnotation,
+					baseSegmentIndex: segmentIndex,
+					startSegmentIndex,
+					endSegmentIndex,
+					segments,
+				}
+			});
+			this._lastView.navigate({ annotationID: existingAnnotation.id });
+			return;
+		}
+
+		// If an old annotation was deleted, clean up stale mappings
+		if (existingAnnotationID) {
+			for (let [idx, annID] of segmentAnnotations) {
+				if (annID === existingAnnotationID) {
+					segmentAnnotations.delete(idx);
+				}
+			}
+		}
+
+		let annotation = this._lastView.addAnnotationFromReadAloudSegments(
+			[segment],
+			{
+				type: type || this._tools[this._state.textSelectionAnnotationMode].type,
+				color: ['highlight', 'underline'].includes(this._state.tool.type)
+					? this._state.tool.color
+					: ANNOTATION_COLORS[0][1],
+			},
+		);
+		if (annotation && segments && segmentIndex >= 0) {
+			segmentAnnotations.set(segmentIndex, annotation.id);
+			this._updateReadAloudUIState({
+				annotationPopup: {
+					annotation,
+					baseSegmentIndex: segmentIndex,
+					startSegmentIndex: segmentIndex,
+					endSegmentIndex: segmentIndex,
+					segments,
+				}
+			});
+			this._lastView.navigate({ annotationID: annotation.id });
+		}
+	}
+
+	_updateReadAloudAnnotation(newBaseIndex, newStartIndex, newEndIndex) {
+		let popup = this._state.readAloudState.annotationPopup;
+		if (!popup) {
+			return;
+		}
+		let { annotation, startSegmentIndex, endSegmentIndex, segments } = popup;
+		let { segmentAnnotations } = this._state.readAloudState;
+		// Get updated annotation data
+		annotation = this._annotationManager._getAnnotationByID(annotation.id);
+		if (!annotation) {
+			return;
+		}
+
+		// Clean up segment mappings in the old range
+		for (let i = startSegmentIndex; i <= endSegmentIndex; i++) {
+			segmentAnnotations.delete(i);
+		}
+		// Delete the old annotation
+		this._annotationManager.deleteAnnotations([annotation.id]);
+		// And create a new one across the new range
+		let segmentsInRange = segments.slice(newStartIndex, newEndIndex + 1);
+		let newAnnotation = this._lastView.addAnnotationFromReadAloudSegments(
+			segmentsInRange,
+			{
+				type: annotation.type,
+				color: annotation.color,
+				comment: annotation.comment,
+			},
+		);
+		if (newAnnotation) {
+			// Add segment mappings across the new range
+			for (let i = newStartIndex; i <= newEndIndex; i++) {
+				segmentAnnotations.set(i, newAnnotation.id);
+			}
+			this._updateReadAloudUIState({
+				annotationPopup: {
+					annotation: newAnnotation,
+					baseSegmentIndex: newBaseIndex,
+					startSegmentIndex: newStartIndex,
+					endSegmentIndex: newEndIndex,
+					segments,
+				}
+			});
+			this._lastView.navigate({ annotationID: newAnnotation.id }, { block: 'center', ifNeeded: false });
+		}
+	}
+
+	moveReadAloudAnnotation(direction, accelerate) {
+		let popup = this._state.readAloudState.annotationPopup;
+		if (!popup) {
+			return;
+		}
+		let { baseSegmentIndex, segments } = popup;
+		let delta = accelerate ? 5 : 1;
+		let newIndex = direction === 'prev' ? baseSegmentIndex - delta : baseSegmentIndex + delta;
+		newIndex = Math.max(0, Math.min(newIndex, segments.length - 1));
+		this._updateReadAloudAnnotation(newIndex, newIndex, newIndex);
+	}
+
+	extendReadAloudAnnotation(direction) {
+		let popup = this._state.readAloudState.annotationPopup;
+		if (!popup) {
+			return;
+		}
+		let { baseSegmentIndex, startSegmentIndex, endSegmentIndex, segments } = popup;
+
+		let newStartIndex = startSegmentIndex;
+		let newEndIndex = endSegmentIndex;
+
+		if (direction === 'prev') {
+			// Alt+Left: shrink backward if extended forward, else extend backward
+			if (endSegmentIndex > baseSegmentIndex) {
+				newEndIndex = endSegmentIndex - 1;
+			}
+			else if (startSegmentIndex > 0) {
+				newStartIndex = startSegmentIndex - 1;
+			}
+			else {
+				return;
+			}
+		}
+		else {
+			// Alt+Right: shrink forward if extended backward, else extend forward
+			// eslint-disable-next-line no-lonely-if
+			if (startSegmentIndex < baseSegmentIndex) {
+				newStartIndex = startSegmentIndex + 1;
+			}
+			else if (endSegmentIndex < segments.length - 1) {
+				newEndIndex = endSegmentIndex + 1;
+			}
+			else {
+				return;
+			}
+		}
+
+		this._updateReadAloudAnnotation(baseSegmentIndex, newStartIndex, newEndIndex);
+	}
+
+	dismissReadAloudAnnotationPopup() {
+		this._updateReadAloudUIState({ annotationPopup: null });
+	}
+
+	deleteReadAloudAnnotation() {
+		let popup = this._state.readAloudState.annotationPopup;
+		if (!popup) {
+			return;
+		}
+		let { startSegmentIndex, endSegmentIndex } = popup;
+		let { segmentAnnotations } = this._state.readAloudState;
+		// Clear segment mappings
+		for (let i = startSegmentIndex; i <= endSegmentIndex; i++) {
+			segmentAnnotations.delete(i);
+		}
+		this._annotationManager.deleteAnnotations([popup.annotation.id]);
+		this._updateReadAloudUIState({ annotationPopup: null });
+	}
+
+	setReadAloudAnnotationColor(color) {
+		let popup = this._state.readAloudState.annotationPopup;
+		if (!popup) {
+			return;
+		}
+		this._annotationManager.updateAnnotations([{
+			id: popup.annotation.id,
+			color,
+		}]);
+		this._updateReadAloudUIState({
+			annotationPopup: {
+				...popup,
+				annotation: this._annotationManager._getAnnotationByID(popup.annotation.id),
+			}
+		});
+	}
+
+	setReadAloudAnnotationType(type) {
+		let popup = this._state.readAloudState.annotationPopup;
+		if (!popup) {
+			return;
+		}
+		this._annotationManager.updateAnnotations([{
+			id: popup.annotation.id,
+			type,
+		}]);
+		this._updateReadAloudUIState({
+			annotationPopup: {
+				...popup,
+				annotation: this._annotationManager._getAnnotationByID(popup.annotation.id),
+			}
+		});
+	}
+
 	toggleFindPopup({ primary, open } = {}) {
 		if (primary === undefined) {
 			primary = this._lastViewPrimary;
@@ -893,6 +1440,20 @@ class Reader {
 			if (!primary) {
 				let { splitType, splitSize } = this._state;
 				state = { ...state, splitType, splitSize };
+			}
+			// Include lastReadAloudPosition in the view state so Zotero can
+			// persist it as a synced setting. If the user has scrolled too far
+			// from the saved position, clear the synced setting.
+			if (primary) {
+				let { savedPosition } = this._state.readAloudState;
+				let lastReadAloudPosition = savedPosition ?? null;
+				if (lastReadAloudPosition) {
+					let tooFar = this._primaryView?.isReadAloudPositionTooFar(lastReadAloudPosition, state);
+					if (tooFar) {
+						lastReadAloudPosition = null;
+					}
+				}
+				state = { ...state, lastReadAloudPosition };
 			}
 			this._onChangeViewState(state, primary);
 		}, DEBOUNCE_STATE_CHANGE);
@@ -972,6 +1533,38 @@ class Reader {
 			this.a11yAnnounceSearchMessage(params.result);
 		};
 
+		let onSetReadAloudState = (params) => {
+			if (typeof params.lang === 'string' && params.lang.includes('-')) {
+				console.warn(`View tried to set Read Aloud lang to tag containing region: ${params.lang}. Return only the bare language.`);
+				params.lang = params.lang.replace(/-.*$/, '');
+			}
+			// Route view outputs to the appropriate owner:
+
+			// targetPosition: manager (imperative jump)
+			if (params.targetPosition && this._readAloudManager.active && this._readAloudManager.segments) {
+				this._readAloudManager.jumpTo(params.targetPosition);
+			}
+			// segments: manager (new segments or segment clear)
+			if ('segments' in params) {
+				if (params.segments && params.segments !== this._readAloudManager.segments) {
+					this._readAloudManager.setSegments(
+						params.segments,
+						params.backwardStopIndex,
+						params.forwardStopIndex,
+					);
+				}
+				else if (params.segments === null) {
+					this._readAloudManager.clearSegments();
+				}
+			}
+			// lang: manager and readAloudState (for rendering gate)
+			if (params.lang && !this._readAloudManager.lang) {
+				this._readAloudManager.setLanguage(params.lang);
+				this._updateReadAloudUIState({ lang: params.lang });
+				this._syncPersistedVoicesToManager();
+			}
+		};
+
 		let onSelectAnnotations = (ids, triggeringEvent) => {
 			this.setSelectedAnnotations(ids, true, triggeringEvent);
 		};
@@ -1046,6 +1639,7 @@ class Reader {
 			lightTheme: this._state.lightTheme,
 			darkTheme: this._state.darkTheme,
 			colorScheme: this._state.colorScheme,
+			readAloudState: this._composeReadAloudStateSnapshot(),
 			findState: this._state[primary ? 'primaryViewFindState' : 'secondaryViewFindState'],
 			viewState: this._state[primary ? 'primaryViewState' : 'secondaryViewState'],
 			location,
@@ -1062,6 +1656,7 @@ class Reader {
 			onSetAnnotationPopup,
 			onSetOverlayPopup,
 			onSetFindState,
+			onSetReadAloudState,
 			onSetOutline,
 			onSelectAnnotations,
 			onTabOut,
@@ -1531,6 +2126,14 @@ class Reader {
 
 	setToolbarPlaceholderWidth(width) {
 		this._updateState({ toolbarPlaceholderWidth: width });
+	}
+
+	setTitle(title) {
+		this._updateState({ title });
+	}
+
+	setLoggedIn(loggedIn) {
+		this._updateState({ loggedIn });
 	}
 
 	focusView(primary = true) {

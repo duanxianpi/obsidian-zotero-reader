@@ -4,12 +4,14 @@
 	"description": "Zotero Reader",
 	"scripts": {
 		"build": "npm run build:pdf.js && npm run build:reader",
-		"build:pdf.js": "sh pdfjs/build",
+		"build:pdf.js": "PDFJS_CONFIG=obsidian bash pdfjs/build",
 		"build:reader": "webpack --config webpack.obsidian.js --mode production",
+		"build:all": "PDFJS_CONFIG=all bash pdfjs/build && webpack",
+		"build:zotero": "PDFJS_CONFIG=zotero bash pdfjs/build && webpack --config-name zotero",
 		"build:ios": "webpack --config-name ios",
-		"build:android": "webpack --config-name android",
+		"build:android": "PDFJS_CONFIG=mobile bash pdfjs/build && webpack --config-name android",
 		"start": "webpack-dev-server --mode development --config-name dev",
-		"view-dev": "webpack-dev-server --mode development --config-name view-dev",
+		"view-dev": "PDFJS_CONFIG=mobile bash pdfjs/build && webpack-dev-server --mode development --config-name view-dev",
 		"test": "echo \"No tests yet\""
 	},
 	"license": "AGPL-3.0",
@@ -22,6 +24,7 @@
 		"@fluent/react": "^0.15.2",
 		"classnames": "^2.3.1",
 		"darkreader": "^4.9.83",
+		"eld": "^2.0.2",
 		"epubjs": "file:epubjs/epub.js",
 		"luaparse": "^0.3.1",
 		"mathjax-full": "^3.2.2",
@@ -31,6 +34,7 @@
 		"queue": "^6.0.2",
 		"react": "^18.3.1",
 		"react-dom": "^18.3.1",
+		"sentencex-ts": "^0.1.13-ts",
 		"sorted-btree": "^1.8.1"
 	},
 	"devDependencies": {

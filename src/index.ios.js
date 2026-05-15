@@ -24,6 +24,7 @@ window.createView = options => {
 	const annotations = JSON.parse(decodeBase64(options.annotations));
     log("Loaded " + annotations.length + " annotations");
     window._view = new View({
+		platform: 'ios',
 		type: options.type,
 		annotations: annotations,
 		viewState: options.viewState,

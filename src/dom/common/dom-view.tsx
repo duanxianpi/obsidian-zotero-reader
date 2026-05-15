@@ -13,23 +13,24 @@ import {
 	OutlineItem,
 	OverlayPopupParams,
 	Platform,
+	Position,
+	ReadAloudGranularity,
+	ReadAloudSegment,
+	RangeRef,
 	SelectionPopupParams,
 	Theme,
 	Tool,
 	ToolType,
 	ViewContextMenuOverlay,
 	ViewStats,
-	WADMAnnotation,
+	WADMAnnotation, ReadAloudStateDelta, ReadAloudStateSnapshot,
 } from "../../common/types";
 import PopupDelayer from "../../common/lib/popup-delayer";
 import { flushSync } from "react-dom";
 import { createRoot, Root } from "react-dom/client";
-import {
-	AnnotationOverlay,
-	DisplayedAnnotation
-} from "./components/overlay/annotation-overlay";
+import { AnnotationOverlay, DisplayedAnnotation } from "./components/overlay/annotation-overlay";
 import React from "react";
-import { Selector } from "./lib/selector";
+import { isSelector, Selector } from "./lib/selector";
 import {
 	caretPositionFromPoint,
 	getBoundingPageRect,
@@ -41,31 +42,37 @@ import {
 } from "./lib/range";
 import { getSelectionRanges, makeDragImageForTextSelection } from "./lib/selection";
 import { FindProcessor } from "./lib/find";
-import { SELECTION_COLOR } from "../../common/defines";
+import {
+	READ_ALOUD_ACTIVE_SEGMENT_COLOR,
+	READ_ALOUD_ACTIVE_SENTENCE_COLOR,
+	SELECTION_COLOR
+} from "../../common/defines";
+import { ReadAloudJumpButton } from "../../common/read-aloud/jump-button";
 import {
 	debounceUntilScrollFinishes,
-	getCodeCombination, getCurrentColorScheme,
-	getKeyCombination, getModeBasedOnColors,
+	getCodeCombination,
+	getCurrentColorScheme,
+	getKeyCombination,
+	getModeBasedOnColors,
 	isFirefox,
 	isMac,
 	isSafari,
-	placeA11yVirtualCursor
+	placeA11yVirtualCursor,
+	throttle
 } from "../../common/lib/utilities";
-import {
-	closestElement,
-	getContainingBlock, isBlock
-} from "./lib/nodes";
+import { closestElement, getContainingBlock, getLang, isBlock, isRTL } from "./lib/nodes";
 import { debounce } from "../../common/lib/debounce";
 import {
 	expandRect,
 	getBoundingRect,
 	isPageRectVisible,
 	pageRectToClientRect,
-	rectContains
+	rectContainsPoint
 } from "./lib/rect";
 import { History } from "../../common/lib/history";
 import { closestMathTeX } from "./lib/math";
-import { DEFAULT_REFLOWABLE_APPEARANCE } from "./defines";
+import { DEFAULT_REFLOWABLE_APPEARANCE, PageWidth, type ReflowableAppearance } from "./lib/appearance";
+import { ReadAloud } from "./lib/read-aloud";
 import { ObsidianBridge } from "../../obsidian-adapter";
 
 abstract class DOMView<State extends DOMViewState, Data> {
@@ -76,6 +83,8 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	initializedPromise: Promise<void>;
 
 	initialized = false;
+
+	protected readonly _options: DOMViewOptions<State, Data>;
 
 	protected readonly _container: Element;
 
@@ -125,17 +134,17 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	protected abstract _find: FindProcessor | null;
 
-	protected readonly _options: DOMViewOptions<State, Data>;
-
 	protected _overlayPopupDelayer: PopupDelayer;
 
 	protected readonly _history: History;
 
 	protected _suspendHistorySaving = false;
 
-	protected _highlightedPosition: Selector | null = null;
+	protected _spotlights = new Map<SpotlightKey, Selector>();
 
-	protected _pointerMovedWhileDown = false;
+	protected _pointerMovementWhileDown = 0;
+
+	protected _lastPointerPosition: { x: number, y: number } | null = null;
 
 	protected _gotPointerUp = false;
 
@@ -146,6 +155,12 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	protected _isCtrlKeyDown = false;
 
 	protected _lastSelectionRange: PersistentRange | null = null;
+
+	protected _readAloud!: ReadAloud<typeof this>;
+
+	protected _readAloudJumpButton!: ReadAloudJumpButton;
+
+	protected _readAloudJumpButtonBlock: Element | null = null;
 
 	protected _iframeCoordScaleFactor = 1;
 
@@ -168,6 +183,8 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	protected _penActive: boolean;
 
 	protected _penExclusive: boolean;
+
+	private _resizeObserver: ResizeObserver;
 
 	protected _a11yVirtualCursorTarget: Node | null;
 
@@ -201,6 +218,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		});
 		this._a11yVirtualCursorTarget = null;
 		this._a11yShouldFocusVirtualCursorTarget = false;
+		this._readAloud = new ReadAloud(this);
 
 		this._iframe = document.createElement('iframe');
 		this._iframe.sandbox.add('allow-same-origin', 'allow-modals');
@@ -221,11 +239,25 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._iframe.setAttribute('csp', this._getCSP());
 		this.initializedPromise = this._initialize();
 		this.initializedPromise.then(() => this.initialized = true);
+		this._resizeIframeImmediate();
+		this._resizeObserver = new ResizeObserver(() => {
+			this._resizeIframeLeading();
+			this._resizeIframeTrailing();
+		});
+		this._resizeObserver.observe(options.container);
 		options.container.append(this._iframe);
 	}
 
 	protected async _initialize(): Promise<void> {
-		this._iframe.srcdoc = await this._getSrcDoc();
+		let srcdoc = await this._getSrcDoc();
+		if (window.dev && isSafari) {
+			// Dev only: Long srcdoc strings make the Safari inspector unusable,
+			// so use a blob URL instead
+			this._iframe.src = URL.createObjectURL(new Blob([srcdoc], { type: 'text/html' }));
+		}
+		else {
+			this._iframe.srcdoc = srcdoc;
+		}
 		return new Promise<void>((resolve, reject) => {
 			this._iframe.addEventListener('load', () => {
 				this._iframeWindow = this._iframe.contentWindow as Window & typeof globalThis;
@@ -269,13 +301,23 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	abstract getData(): Data;
 
+	abstract get lang(): string;
+
+	get iframeDocument(): Document {
+		return this._iframeDocument;
+	}
+
+	get iframeWindow(): Window & typeof globalThis {
+		return this._iframeWindow;
+	}
+
 	protected async _handleIFrameLoaded(): Promise<void> {
 		this._iframeWindow.addEventListener('contextmenu', this._handleContextMenu.bind(this));
 		this._iframeWindow.addEventListener('keydown', this._handleKeyDown.bind(this), true);
 		this._iframeWindow.addEventListener('keyup', this._handleKeyUp.bind(this));
 		this._iframeWindow.addEventListener('click', this._handleClick.bind(this));
 		this._iframeDocument.addEventListener('pointerover', this._handlePointerOver.bind(this));
-		this._iframeDocument.addEventListener('pointerout', this._handlePointerLeave.bind(this));
+		this._iframeDocument.addEventListener('pointerout', this._handlePointerOut.bind(this));
 		this._iframeDocument.addEventListener('pointerdown', this._handlePointerDown.bind(this), true);
 		this._iframeDocument.addEventListener('pointerup', this._handlePointerUp.bind(this));
 		this._iframeDocument.addEventListener('pointercancel', this._handlePointerUp.bind(this));
@@ -295,6 +337,8 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._iframeDocument.addEventListener('wheel', this._handleWheelCapture.bind(this), { passive: false, capture: true });
 		this._iframeDocument.addEventListener('selectionchange', this._handleSelectionChange.bind(this));
 
+		this._iframeDocument.body.addEventListener('pointerleave', this._handlePointerLeave.bind(this));
+
 		let injectStyle = this._iframeDocument.createElement('style');
 		injectStyle.innerHTML = injectCSS;
 		this._iframeDocument.head.append(injectStyle);
@@ -313,6 +357,11 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		let annotationsStyle = this._iframeDocument.createElement('style');
 		annotationsStyle.innerHTML = annotationsCSS;
 		this._annotationShadowRoot.append(annotationsStyle);
+
+		this._readAloudJumpButton = new ReadAloudJumpButton(this._iframeDocument, {
+			title: this._options.getLocalizedString?.('reader-read-aloud'),
+			onClick: () => this._handleReadAloudJumpButtonClick(),
+		});
 
 		this._iframeDocument.documentElement.classList.toggle('is-firefox', isFirefox);
 		this._iframeDocument.documentElement.classList.toggle('is-safari', isSafari);
@@ -350,24 +399,25 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	abstract toDisplayedRange(selector: Selector): Range | null;
 
-	protected abstract _navigateToSelector(selector: Selector, options?: NavigateOptions): void;
+	abstract navigateToSelector(selector: Selector, options?: NavigateOptions): void;
 
 	// ***
 	// Abstractions over document structure
 	// ***
 
-	protected abstract _getHistoryLocation(): NavLocation | null;
+	abstract getAnnotationFromRange(range: Range, type: AnnotationType, color?: string): NewAnnotation<WADMAnnotation> | null;
 
-	protected abstract _getAnnotationFromRange(range: Range, type: AnnotationType, color?: string): NewAnnotation<WADMAnnotation> | null;
+	protected abstract _getHistoryLocation(): NavLocation | null;
 
 	protected abstract _updateViewState(): void;
 
 	protected abstract _updateViewStats(): void;
 
-	protected _getContainingRoot(node: Node): HTMLElement | null {
-		return this._iframeDocument.body.contains(node)
-			? this._iframeDocument.body
-			: null;
+	protected abstract _getRoots(includeUnmounted?: boolean): HTMLElement[];
+
+	protected _getContainingRoot(node: Node, includeUnmounted = false): HTMLElement | null {
+		return this._getRoots(includeUnmounted).find(root => root.contains(node))
+			?? null;
 	}
 
 	// ***
@@ -429,7 +479,11 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		}
 		let range: Range;
 		if (type === 'highlight' || type === 'underline') {
-			range = makeRangeSpanning(...getSelectionRanges(selection));
+			range = makeRangeSpanning(
+				getSelectionRanges(selection),
+				false,
+				this._iframeDocument,
+			);
 		}
 		else if (type === 'note') {
 			let element = closestElement(selection.getRangeAt(0).commonAncestorContainer);
@@ -446,7 +500,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		else {
 			return null;
 		}
-		return this._getAnnotationFromRange(range, type, color);
+		return this.getAnnotationFromRange(range, type, color);
 	}
 
 	/**
@@ -567,7 +621,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	}
 
 	protected _updateAnnotationRange(annotation: WADMAnnotation, range: Range): WADMAnnotation {
-		let newAnnotation = this._getAnnotationFromRange(range, annotation.type);
+		let newAnnotation = this.getAnnotationFromRange(range, annotation.type);
 		if (!newAnnotation) {
 			throw new Error('Invalid updated range');
 		}
@@ -580,7 +634,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		};
 	}
 
-	protected _handleViewUpdate() {
+	protected _handleViewUpdate(synchronous = true) {
 		if (!this.initialized) {
 			return;
 		}
@@ -588,7 +642,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._updateViewStats();
 		this._displayedAnnotationCache = new WeakMap();
 		this._boundingPageRectCache = new WeakMap();
-		this._renderAnnotations(true);
+		this._renderAnnotations(synchronous);
 		this._repositionPopups();
 	}
 
@@ -651,13 +705,13 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				range: a.range.toRange(),
 			})));
 		}
-		if (this._highlightedPosition) {
-			let range = this.toDisplayedRange(this._highlightedPosition);
+		for (let [key, selector] of this._spotlights) {
+			let range = this.toDisplayedRange(selector);
 			if (range) {
 				displayedAnnotations.push({
 					type: 'highlight',
-					color: SELECTION_COLOR,
-					key: '_highlightedPosition',
+					color: this._getSpotlightColor(key),
+					key,
 					range,
 				});
 			}
@@ -712,7 +766,13 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		if (selection.isCollapsed) {
 			return;
 		}
-		let range = moveRangeEndsIntoTextNodes(makeRangeSpanning(...getSelectionRanges(selection)));
+		let range = moveRangeEndsIntoTextNodes(
+			makeRangeSpanning(
+				getSelectionRanges(selection),
+				false,
+				this._iframeDocument,
+			)
+		);
 		// Split the selection into its column-separated parts and get the
 		// bounding rect encompassing the visible ones. This gives us a more
 		// accurate anchor for the popup.
@@ -729,7 +789,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				this._iframeWindow
 			)
 		);
-		let annotation = this._getAnnotationFromRange(range, 'highlight');
+		let annotation = this.getAnnotationFromRange(range, 'highlight');
 		if (annotation) {
 			let rect: ArrayRect = [domRect.left, domRect.top, domRect.right, domRect.bottom];
 			this._options.onSetSelectionPopup({ rect, annotation });
@@ -784,7 +844,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				return annotation;
 			}
 			range = moveRangeEndsIntoTextNodes(range);
-			let newAnnotation = this._getAnnotationFromRange(range, annotation.type, annotation.color);
+			let newAnnotation = this.getAnnotationFromRange(range, annotation.type, annotation.color);
 			if (!newAnnotation) {
 				console.warn('Could not create annotation from normalized range', annotation);
 				return annotation;
@@ -818,6 +878,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		let roots = [this._iframeDocument.documentElement, this._annotationRenderRootEl];
 		for (let root of roots) {
 			root.dataset.colorScheme = themeColorScheme;
+			root.classList.toggle('invert-images', !!theme.invertImages);
 			root.style.colorScheme = themeColorScheme;
 			root.style.setProperty('--background-color', theme.background);
 			root.style.setProperty('--text-color', theme.foreground);
@@ -845,17 +906,21 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		if (this._tool.type == 'note') {
 			let range = this._getNoteTargetRange(event);
 			if (range) {
-				this._previewAnnotation = this._getAnnotationFromRange(range, 'note', this._tool.color);
+				this._previewAnnotation = this.getAnnotationFromRange(range, 'note', this._tool.color);
 				this._renderAnnotations();
 			}
 		}
 	}
 
-	protected _handlePointerLeave(event: PointerEvent) {
-		const link = (event.target as Element).closest('a');
+	protected _handlePointerOut(event: PointerEvent) {
+		let link = (event.target as Element).closest('a');
 		if (link && !this._isExternalLink(link) && event.relatedTarget) {
 			this._handlePointerLeftInternalLink();
 		}
+	}
+
+	protected _handlePointerLeave(event: PointerEvent) {
+		this._hideReadAloudJumpButton();
 	}
 
 	protected _handlePointerOverInternalLink(link: HTMLAnchorElement) {
@@ -873,7 +938,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		event.preventDefault();
 		let range = this._getNoteTargetRange(event);
 		if (range) {
-			this._previewAnnotation = this._getAnnotationFromRange(range, 'note', this._draggingNoteAnnotation.color);
+			this._previewAnnotation = this.getAnnotationFromRange(range, 'note', this._draggingNoteAnnotation.color);
 			this._renderAnnotations();
 		}
 	}
@@ -1103,7 +1168,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 					return;
 				}
 				this._options.onUpdateAnnotations([annotation]);
-				this._navigateToSelector(annotation.position, {
+				this.navigateToSelector(annotation.position, {
 					block: 'center',
 					behavior: 'smooth',
 					skipHistory: true,
@@ -1183,12 +1248,12 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				if (block) {
 					let range = this._iframeDocument.createRange();
 					range.selectNode(block);
-					annotation = this._getAnnotationFromRange(range, type, this._options.tools[type].color);
+					annotation = this.getAnnotationFromRange(range, type, this._options.tools[type].color);
 				}
 			}
 			if (annotation) {
 				this._options.onAddAnnotation(annotation, true);
-				this._navigateToSelector(annotation.position, {
+				this.navigateToSelector(annotation.position, {
 					block: 'center',
 					behavior: 'smooth',
 					skipHistory: true,
@@ -1248,17 +1313,33 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	}
 
 	private _handleContextMenu(event: MouseEvent) {
-		if (this._options.platform === 'web') {
+		if (this._options.platform === 'web'
+				// Android fires contextmenu event before showing text selection context menu
+				|| this._options.platform === 'android') {
 			return;
 		}
 		// Prevent native context menu
 		event.preventDefault();
+		let el = event.target as Element;
 		let br = this._iframe.getBoundingClientRect();
-		let overlay = this._getContextMenuOverlay(event.target as Element);
+		let overlay = this._getContextMenuOverlay(el);
+
+		let position: Position | undefined;
+		if (this._iframeDocument.getSelection()!.isCollapsed) {
+			let range = this._iframeDocument.createRange();
+			range.selectNodeContents(el);
+			position = this.toSelector(range) ?? undefined;
+		}
+		else {
+			let annotation = this._getAnnotationFromTextSelection('highlight');
+			position = annotation?.position;
+		}
+
 		this._options.onOpenViewContextMenu({
 			x: br.x + event.clientX * this._iframeCoordScaleFactor,
 			y: br.y + event.clientY * this._iframeCoordScaleFactor,
 			overlay,
+			position,
 		});
 	}
 
@@ -1403,7 +1484,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		}
 
 		if (event.button !== 0
-				|| this._options.mobile && this._pointerMovedWhileDown) {
+				|| this._options.mobile && this._pointerMovementWhileDown > 5) {
 			return;
 		}
 
@@ -1495,7 +1576,8 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	protected _handlePointerDown(event: PointerEvent) {
 		if ((event.buttons & 1) === 1 && event.isPrimary) {
 			this._gotPointerUp = false;
-			this._pointerMovedWhileDown = false;
+			this._pointerMovementWhileDown = 0;
+			this._lastPointerPosition = { x: event.clientX, y: event.clientY };
 
 			let touchCaretPosition = this._getTouchAnnotationStartPosition(event);
 			if (touchCaretPosition) {
@@ -1555,29 +1637,35 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		// If we're using a tool that immediately creates an annotation based on the current selection, we want to use
 		// debounced _tryUseTool() in order to wait for double- and triple-clicks to complete. A multi-click is only
 		// possible if the pointer hasn't moved while down.
-		else if (!this._pointerMovedWhileDown && (this._tool.type == 'highlight' || this._tool.type == 'underline')) {
+		else if (this._pointerMovementWhileDown <= 5 && (this._tool.type == 'highlight' || this._tool.type == 'underline')) {
 			this._tryUseToolDebounced();
 		}
 		else {
 			let wasToolUsed = this._tryUseTool();
 			if (!wasToolUsed
-					&& !this._pointerMovedWhileDown
+					&& this._pointerMovementWhileDown <= 5
 					&& !this._handledPointerIDs.has(event.pointerId)
 					&& !(event.target as Element).closest('a')) {
 				this._options.onBackdropTap?.(event);
 			}
 		}
 		this._touchAnnotationStartPosition = null;
-		this._previewAnnotation = null;
 		this._renderAnnotations();
 		this._iframeDocument.body.classList.remove('creating-touch-annotation');
 	}
 
 	protected _handlePointerMove(event: PointerEvent) {
+		this._handlePointerMoveForReadAloud(event);
+
 		if ((event.buttons & 1) !== 1 || !event.isPrimary) {
 			return;
 		}
-		this._pointerMovedWhileDown = true;
+		if (this._lastPointerPosition) {
+			this._pointerMovementWhileDown
+				+= Math.abs(event.clientX - this._lastPointerPosition.x)
+				+ Math.abs(event.clientY - this._lastPointerPosition.y);
+		}
+		this._lastPointerPosition = { x: event.clientX, y: event.clientY };
 		if (this._touchAnnotationStartPosition
 				&& this._canToolDoTouchAnnotation(this._tool.type)
 				&& this._canPointerEventDoTouchAnnotation(event)) {
@@ -1590,7 +1678,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 					range.setStart(endPos.offsetNode, endPos.offset);
 					range.setEnd(this._touchAnnotationStartPosition.offsetNode, this._touchAnnotationStartPosition.offset);
 				}
-				let annotation = this._getAnnotationFromRange(range, this._tool.type, this._tool.color);
+				let annotation = this.getAnnotationFromRange(range, this._tool.type, this._tool.color);
 				if (annotation) {
 					this._previewAnnotation = annotation;
 					this._renderAnnotations();
@@ -1599,6 +1687,81 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			this._penActive ||= event.pointerType === 'pen';
 			event.stopPropagation();
 		}
+	}
+
+	protected _handlePointerMoveForReadAloud = throttle((event: MouseEvent) => {
+		if (!this._readAloud.state?.popupOpen || event.buttons !== 0) {
+			return;
+		}
+		let iconTargetRect = this._readAloudJumpButton.iconTargetRect;
+		if (iconTargetRect && rectContainsPoint(iconTargetRect, event.clientX, event.clientY)) {
+			return;
+		}
+
+		let targets = this._iframeDocument.elementsFromPoint(event.clientX, event.clientY)
+			.filter(target => !this._readAloudJumpButton.contains(target));
+		let target = targets[0];
+		if (!target) {
+			return;
+		}
+
+		let element = closestElement(target);
+		if (!element) return;
+
+		let block = getContainingBlock(element);
+		if (!block || block === this._readAloudJumpButtonBlock) {
+			return;
+		}
+
+		// Only show for blocks that are the direct containing block of a segment,
+		// not ancestor blocks (e.g. a wrapper <div> containing <p>s in snapshots)
+		let segments = this._readAloud.state!.segments;
+		if (!segments
+				|| !segments.some(s => getContainingBlock(
+					closestElement((s.position as RangeRef).range.startContainer)!
+				) === block)) {
+			return;
+		}
+
+		this._readAloudJumpButtonBlock = block;
+
+		let blockRect = block.getBoundingClientRect();
+		let scrollX = this._iframeWindow.scrollX;
+		let scrollY = this._iframeWindow.scrollY;
+
+		let rtl = isRTL(block);
+		let width = rtl
+			? this._iframeDocument.documentElement.scrollWidth - blockRect.right - scrollX
+			: blockRect.left + scrollX;
+		this._readAloudJumpButton.show({
+			marginWidth: `${width}px`,
+			top: `${blockRect.top + scrollY}px`,
+			height: `${blockRect.height}px`,
+		});
+	}, 50);
+
+	protected _hideReadAloudJumpButton() {
+		this._readAloudJumpButton.hide();
+		this._readAloudJumpButtonBlock = null;
+	}
+
+	protected _handleReadAloudJumpButtonClick() {
+		if (!this._readAloudJumpButtonBlock || !this._readAloud.state) return;
+
+		let blockRange = this._iframeDocument.createRange();
+		blockRange.selectNodeContents(this._readAloudJumpButtonBlock);
+
+		// Immediately move the highlight to the target block
+		let blockSelector = this.toSelector(blockRange);
+		if (blockSelector) {
+			this.setSpotlight(SpotlightKey.ReadAloudActiveSegment, blockSelector, null);
+		}
+
+		blockRange.collapse(true);
+
+		this._options.onSetReadAloudState({
+			targetPosition: { range: new PersistentRange(blockRange) },
+		});
 	}
 
 	protected _canToolDoTouchAnnotation(toolType: ToolType): toolType is 'highlight' | 'underline' {
@@ -1627,16 +1790,16 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		// Only start touch annotation if the touch was within 100px of
 		// the detected caret position, so scrolling is still allowed
 		// in the margins with an annotation tool selected
-		if (!caretRect || !rectContains(expandRect(caretRect, 100), event.clientX, event.clientY)) {
+		if (!caretRect || !rectContainsPoint(expandRect(caretRect, 100), event.clientX, event.clientY)) {
 			return null;
 		}
 
 		// Try to snap to the start of the word
 		if ('Segmenter' in Intl && caretPosition.offsetNode.nodeType === Node.TEXT_NODE) {
 			try {
-				let lang = closestElement(caretPosition.offsetNode)?.closest('[lang]')
-					?.getAttribute('lang') || 'en';
-				let wordSegmenter = new Intl.Segmenter(lang, { granularity: 'word' });
+				let wordSegmenter = new Intl.Segmenter(getLang(caretPosition.offsetNode), {
+					granularity: 'word'
+				});
 
 				let words = wordSegmenter.segment(caretPosition.offsetNode.nodeValue!);
 				let wordContainingCaret = words.containing(caretPosition.offset);
@@ -1685,6 +1848,26 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		}
 	}
 
+	protected _resizeIframeImmediate() {
+		let dpr = window.devicePixelRatio || 1;
+		let width = Math.floor(this._container.clientWidth * dpr) / dpr;
+		let height = Math.floor(this._container.clientHeight * dpr) / dpr;
+		this._iframe.style.width = width + 'px';
+		this._iframe.style.height = height + 'px';
+		if (this._iframeDocument) {
+			this._iframeDocument.documentElement.style.width = width + 'px';
+			this._iframeDocument.documentElement.style.height = height + 'px';
+		}
+	}
+
+	protected _resizeIframeLeading() {
+		// No-op besides EPUB
+	}
+
+	protected _resizeIframeTrailing() {
+		this._resizeIframeImmediate();
+	}
+
 	protected _handleResize() {
 		this._handleViewUpdate();
 	}
@@ -1695,6 +1878,34 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			this._renderAnnotations();
 			this._repositionPopups();
 		});
+	}
+
+	protected _onManualNavigation(): void {
+		this._readAloud.setPositionLocked(false);
+	}
+
+	lockPositionToReadAloud(): void {
+		this._readAloud.setPositionLocked(true);
+	}
+
+	getSerializableReadAloudPosition(position: Position): Selector | null {
+		if ('range' in position) {
+			return this.toSelector(position.range.toRange());
+		}
+		if (!isSelector(position)) {
+			return null;
+		}
+		return position;
+	}
+
+	isReadAloudPositionTooFar(savedPosition: Position, _viewState: Record<string, unknown>): boolean {
+		let range = this.toDisplayedRange(savedPosition as Selector);
+		if (!range) {
+			// Can't resolve the selector - not in a displayed root
+			return true;
+		}
+		let rect = getBoundingPageRect(range);
+		return !isPageRectVisible(rect, this._iframeWindow, this._iframeWindow.innerHeight * 3);
 	}
 
 	protected _handleScrollCapture(event: Event) {
@@ -1790,12 +2001,28 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		let selectionBoundingRect = getBoundingRect(
 			getSelectionRanges(selection).map(range => range.getBoundingClientRect())
 		);
-		return rectContains(selectionBoundingRect, x, y);
+		return rectContainsPoint(selectionBoundingRect, x, y);
+	}
+
+	protected _keepSelection<T>(block: () => T): T {
+		let selection = this._iframeDocument.getSelection();
+		if (!selection || selection.isCollapsed) {
+			return block();
+		}
+
+		let rangesBefore = getSelectionRanges(selection).map(r => new PersistentRange(r));
+		let result = block();
+		selection.removeAllRanges();
+		for (let range of rangesBefore) {
+			selection.addRange(range.toRange());
+		}
+		return result;
 	}
 
 	destroy() {
 		this._overlayPopupDelayer.destroy();
 		this._annotationRenderRoot.unmount();
+		this._resizeObserver.disconnect();
 	}
 
 	// ***
@@ -1936,6 +2163,41 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._penExclusive = penExclusive;
 	}
 
+	setReadAloudState(state: ReadAloudStateSnapshot): void {
+		if (!state.popupOpen) {
+			this._hideReadAloudJumpButton();
+		}
+		let updatedState = this._readAloud.setState(state);
+		if (updatedState) {
+			this._options.onSetReadAloudState(updatedState);
+		}
+	}
+
+	get hasReadAloudTarget(): boolean {
+		return this._readAloud.hasTarget;
+	}
+
+	addAnnotationFromReadAloudSegments(segments: ReadAloudSegment[], init: NewAnnotation<WADMAnnotation>): Annotation | null {
+		let annotation = this._readAloud.getAnnotationFromSegments(segments, init);
+		if (annotation) {
+			return this._options.onAddAnnotation(annotation);
+		}
+		return null;
+	}
+
+	computeReadAloudRepositionIndex(position: Position, segments: ReadAloudSegment[]): number | null {
+		return this._readAloud.computeRepositionIndex(position, segments);
+	}
+
+	getReadAloudRanges(granularity: ReadAloudGranularity): Range[] {
+		let rootRanges = this._getRoots(true).map((root) => {
+			let range = this._iframeDocument.createRange();
+			range.selectNodeContents(root);
+			return range;
+		});
+		return rootRanges.flatMap(rootRange => this._readAloud.getRanges(rootRange, granularity));
+	}
+
 	// ***
 	// Public methods to control the view from the outside
 	// ***
@@ -1968,19 +2230,43 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	protected abstract _setScale(scale: number): void;
 
-	protected _setHighlight(selector: Selector) {
-		this._highlightedPosition = selector;
-		this._renderAnnotations(true);
+	setSpotlight(key: SpotlightKey, selector: Selector | null, timeout: number | null = 2000) {
+		if (selector) {
+			this._spotlights.set(key, selector);
+		}
+		else {
+			this._spotlights.delete(key);
+		}
+		this._renderAnnotations();
+
+		if (selector === null || timeout === null) return;
 
 		setTimeout(() => {
-			if (this._highlightedPosition === selector) {
-				this._highlightedPosition = null;
+			if (this._spotlights.get(key) === selector) {
+				this._spotlights.delete(key);
 				this._renderAnnotations(true);
 			}
-		}, 2000);
+		}, timeout);
+	}
+
+	protected _getSpotlightColor(key: SpotlightKey): string {
+		switch (key) {
+			case SpotlightKey.Navigation:
+				return SELECTION_COLOR;
+			case SpotlightKey.ReadAloudActiveSegment:
+				return READ_ALOUD_ACTIVE_SEGMENT_COLOR;
+			case SpotlightKey.ReadAloudActiveSentence:
+				return READ_ALOUD_ACTIVE_SENTENCE_COLOR;
+			default:
+				throw new Error('Unknown highlight key: ' + key);
+		}
 	}
 
 	navigate(location: NavLocation, options: NavigateOptions = {}) {
+		if (!options.skipHistory) {
+			this._onManualNavigation();
+		}
+
 		if (location.annotationID) {
 			options.block ||= 'center';
 			options.ifNeeded ??= true;
@@ -1990,23 +2276,25 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				return;
 			}
 			let selector = annotation.position;
-			this._navigateToSelector(selector, options);
+			this.navigateToSelector(selector, options);
 		}
 		else if (location.position) {
 			options.block ||= 'center';
 			options.ifNeeded ??= true;
 
 			let selector = location.position as Selector;
-			this._navigateToSelector(selector, options);
-			this._setHighlight(selector);
+			this.navigateToSelector(selector, options);
+			this.setSpotlight(SpotlightKey.Navigation, selector);
 		}
 	}
 
 	navigateBack() {
+		this._onManualNavigation();
 		this._history.navigateBack();
 	}
 
 	navigateForward() {
+		this._onManualNavigation();
 		this._history.navigateForward();
 	}
 
@@ -2039,6 +2327,7 @@ export type DOMViewOptions<State extends DOMViewState, Data> = {
 	penConnected?: boolean;
 	penActive?: boolean;
 	penExclusive?: boolean;
+	readAloudVoices: Map<string, string>,
 	onSetOutline: (outline: OutlineItem[]) => void;
 	onChangeViewState: (state: State, primary?: boolean) => void;
 	onChangeViewStats: (stats: ViewStats) => void;
@@ -2051,8 +2340,14 @@ export type DOMViewOptions<State extends DOMViewState, Data> = {
 	onSetAnnotationPopup: (params?: AnnotationPopupParams<WADMAnnotation> | null) => void;
 	onSetOverlayPopup: (params?: OverlayPopupParams) => void;
 	onSetFindState: (state?: FindState) => void;
+	onSetReadAloudState: (state: ReadAloudStateDelta) => void;
 	onSetZoom?: (iframe: HTMLIFrameElement, zoom: number) => void;
-	onOpenViewContextMenu: (params: { x: number, y: number, overlay?: ViewContextMenuOverlay }) => void;
+	onOpenViewContextMenu: (params: {
+		x: number;
+		y: number;
+		overlay?: ViewContextMenuOverlay;
+		position?: Position;
+	}) => void;
 	onOpenAnnotationContextMenu: (params: { ids: string[], x: number, y: number, view: boolean }) => void;
 	onFocus: () => void;
 	onTabOut: (isShiftTab?: boolean) => void;
@@ -2064,7 +2359,7 @@ export type DOMViewOptions<State extends DOMViewState, Data> = {
 	onBackdropTap?: (event: PointerEvent) => void;
 	getLocalizedString?: (name: string) => string;
 	data: Data & {
-		buf?: Uint8Array,
+		buf?: Uint8Array<ArrayBuffer>,
 		url?: string
 	};
 };
@@ -2077,25 +2372,21 @@ export interface DOMViewState {
 export interface CustomScrollIntoViewOptions extends Omit<ScrollIntoViewOptions, 'inline'> {
 	block?: 'center' | 'start';
 	ifNeeded?: boolean;
+	visibilityMargin?: number;
 	offsetBlock?: number;
 }
 
 export interface NavigateOptions extends CustomScrollIntoViewOptions {
 	skipHistory?: boolean;
+
+	/** Don't refresh the user anchor as part of this navigation. */
+	keepAnchor?: boolean;
 }
 
-export interface ReflowableAppearance {
-	lineHeight: number;
-	wordSpacing: number;
-	letterSpacing: number;
-	pageWidth: PageWidth;
-	useOriginalFont: boolean;
-}
-
-export const enum PageWidth {
-	Narrow = -1,
-	Normal = 0,
-	Full = 1
+export const enum SpotlightKey {
+	Navigation = 'Navigation',
+	ReadAloudActiveSegment = 'ReadAloudActiveSegment',
+	ReadAloudActiveSentence = 'ReadAloudActiveSentence',
 }
 
 export default DOMView;
