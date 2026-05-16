@@ -154,7 +154,9 @@ class Reader {
 
 		// Initialize speech synthesis (for Chrome, which only returns voices
 		// the second time this is called)
-		window.speechSynthesis.getVoices();
+		// ZotFlow: Android WebView does not support speech synthesis,
+		// so this is skipped on mobile
+		window.speechSynthesis?.getVoices();
 
 		this._enableReadAloud = options.enableReadAloud || false;
 		this._readAloudRemoteInterface = options.readAloudRemoteInterface || null;
