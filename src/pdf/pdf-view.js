@@ -247,11 +247,20 @@ class PDFView {
 				else {
 					this._init();
 				}
+				// ZotFlow: Force main-thread fetching of fonts/cmaps/wasm. Reader assets are
+				// bundled and served as blob URLs, and the global fetch/XHR is patched
+				// on the iframe window (see patch-inlined-assets.ts) but NOT inside the
+				// PDF.js web worker scope. When the iframe is loaded via srcdoc (Android),
+				// document.baseURI becomes an http(s) origin, so PDF.js auto-enables
+				// useWorkerFetch and tries to fetch '../web/...' inside the worker, where
+				// the blob base can't resolve relative paths -> font/wasm load failures.
+				// Forcing useWorkerFetch:false routes these loads through the patched
+				// main-thread factory (FetchBinaryData), matching desktop behaviour.
 				if (options.data.buf) {
-					this._iframeWindow.PDFViewerApplication.open({ data: options.data.buf, password: this._password });
+					this._iframeWindow.PDFViewerApplication.open({ data: options.data.buf, password: this._password, useWorkerFetch: false });
 				}
 				else {
-					this._iframeWindow.PDFViewerApplication.open({ url: options.data.url, password: this._password });
+					this._iframeWindow.PDFViewerApplication.open({ url: options.data.url, password: this._password, useWorkerFetch: false });
 				}
 				if (this._iframeWindow.PDFViewerApplication.pdfLoadingTask) {
 					this._iframeWindow.PDFViewerApplication.pdfLoadingTask.onPassword = handlePasswordRequest;
