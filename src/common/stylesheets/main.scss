@@ -44,3 +44,9 @@
 @import "components/select";
 @import "components/custom-select";
 @import "components/other";
+
+//
+// Responsive overrides (imported last so they win the cascade)
+//
+
+@import "components/responsive";

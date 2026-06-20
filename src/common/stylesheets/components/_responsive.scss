@@ -1,0 +1,113 @@
+//
+// ZotFlow: Narrow-viewport (phone / narrow split-pane) overrides.
+//
+// By default the annotations sidebar uses a "push" layout: opening it shifts
+// the document right by `--sidebar-width`, leaving the PDF/EPUB a cramped
+// half-width column on small screens. On narrow viewports we instead turn the
+// sidebar into an overlay drawer that slides over a full-width document.
+//
+// This partial is imported LAST in `main.scss`, so its rules win by source
+// order without needing `!important`. Adjust `$mobile-breakpoint` to change the
+// width at which the layout switches.
+//
+
+$mobile-breakpoint: 768px;
+
+// Tap-to-dismiss backdrop for the overlay sidebar. It is inert by default; the
+// rule inside the media query below activates it only on narrow viewports while
+// the drawer is open, so a tap anywhere on the document closes the sidebar.
+#zf-sidebar-backdrop {
+	display: none;
+}
+
+@media (max-width: $mobile-breakpoint) {
+	// Don't push the document aside; let the sidebar overlay it instead.
+	body.sidebar-open {
+		#split-view,
+		.split-view {
+			inset-inline-start: 0;
+		}
+	}
+
+	// Wider, drawer-style sidebar with a shadow so it reads as an overlay.
+	// The hidden offset is kept in sync with the drawer width below.
+	#sidebarContainer {
+		width: min(85vw, 320px);
+		left: calc(-1 * min(85vw, 320px));
+		box-shadow: 2px 0 14px rgba(0, 0, 0, 0.35);
+
+		body.sidebar-open & {
+			left: 0;
+		}
+	}
+
+	// Dim, click-catching backdrop shown while the drawer is open. It sits above
+	// the document (which lives in a nested iframe, so a plain document click
+	// listener wouldn't catch taps on it) but below the sidebar drawer and the
+	// toolbar, so those stay interactive. The handler that actually closes the
+	// sidebar is wired in index.obsidian.reader.js.
+	body.sidebar-open #zf-sidebar-backdrop {
+		display: block;
+		position: absolute;
+		top: $height-toolbar;
+		inset-inline: 0;
+		bottom: 0;
+		z-index: $z-index-sidebar - 1;
+		background: rgba(0, 0, 0, 0.25);
+	}
+
+	// The top toolbar packs many controls into a fixed-height row. On narrow
+	// viewports they no longer fit, so instead of letting flexbox squash the
+	// buttons (clipping their icons) we let the toolbar scroll horizontally.
+	// `space-between` degrades to `flex-start` once free space is negative, so
+	// the sections simply pack from the start and overflow to the end, where
+	// they become reachable by swiping/scrolling.
+	.toolbar {
+		overflow-x: auto;
+		overflow-y: hidden;
+		// When the bar overflows, `justify-content: space-between` collapses to
+		// `flex-start` and packs the .start/.center/.end groups flush together,
+		// so the boundary icons (e.g. the page number against the highlight
+		// tool) end up touching. Add an explicit gap so the groups stay clearly
+		// separated while scrolling.
+		column-gap: 12px;
+		// Hide the scrollbar — on a 41px-tall bar it would waste space and look
+		// out of place. Touch users swipe; the controls stay reachable.
+		scrollbar-width: none;
+
+		&::-webkit-scrollbar {
+			display: none;
+		}
+
+		// Keep every control at its intrinsic size; scroll rather than squash.
+		.start,
+		.center,
+		.end {
+			flex-shrink: 0;
+		}
+
+		.toolbar-button,
+		.toolbar-dropdown-button,
+		.toolbar-text-input,
+		.divider {
+			flex-shrink: 0;
+		}
+
+		// `#numPages` ("/ N") keeps its label in an absolutely-positioned child,
+		// so the span collapses to the width of its leading &nbsp; (~4px) and the
+		// label overflows onto the next control. On desktop the space-between gap
+		// masks this; once the bar packs tight, the label overlaps the highlight
+		// tool. Put the label back in normal flow so the span takes its true
+		// width and the layout reserves room for it.
+		#numPages div {
+			position: static;
+		}
+
+		// The EPUB seek bar is absolutely positioned and normally straddles the
+		// toolbar's bottom edge. `overflow-y: hidden` would clip its lower half,
+		// so pull it fully inside the (now-clipping) scroll container.
+		.reading-progress {
+			bottom: 0;
+		}
+	}
+}

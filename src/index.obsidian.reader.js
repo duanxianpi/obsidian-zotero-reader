@@ -174,6 +174,19 @@ export default class ZoteroReaderAdapter {
 		await this.reader.initializedPromise;
 		window._reader = this.reader;
 
+		// Wire the mobile "tap outside to close" backdrop (see
+		// index.obsidian.reader.html + stylesheets/components/_responsive.scss).
+		// The backdrop only receives pointer events while it is visible (narrow
+		// viewport + sidebar open), so a tap on it always means "dismiss the
+		// drawer". Mirrors the sidebar-toggle button: update state + emit.
+		const sidebarBackdrop = document.getElementById("zf-sidebar-backdrop");
+		if (sidebarBackdrop) {
+			sidebarBackdrop.addEventListener("pointerdown", () => {
+				this.reader.toggleSidebar(false);
+				this.emit({ type: "sidebarToggled", open: false });
+			});
+		}
+
 		// adopt obsidian styles
 		this.adoptObsidianStyles(
 			window.OBSIDIAN_THEME_VARIABLES,
