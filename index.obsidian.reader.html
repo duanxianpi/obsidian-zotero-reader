@@ -62,11 +62,20 @@
 	<!-- Script to copy and scope Obsidian app.css styles -->
 	<script>
 			(() => {
+				// ========== Performance Monitoring ==========
+				const perfMetrics = {
+					startTime: performance.now(),
+					ruleCount: 0,
+					selectorCount: 0,
+					errors: [],
+				};
+
 				const processRuleList = (ruleList, prefix) => {
 					let out = "";
 					for (const rule of Array.from(ruleList || [])) {
 						switch (rule.type) {
 							case CSSRule.STYLE_RULE: {
+								perfMetrics.ruleCount++;
 								out += prefixStyleRule(rule, prefix) + "\n";
 								break;
 							}
@@ -96,6 +105,7 @@
 											prefix
 										) + "\n";
 								} catch (e) {
+									perfMetrics.errors.push("Could not access @import stylesheet");
 									console.warn(
 										"Could not access @import stylesheet:",
 										e
@@ -196,6 +206,7 @@
 				// But if a selector starts with html/body/:root, we must replace that leftmost part.
 				const prefixSelectors = (selectorText, prefix) => {
 					const selectors = splitSelectorList(selectorText);
+					perfMetrics.selectorCount += selectors.length;
 					const transformed = selectors.map((sel) => {
 						const { base, pseudo } = extractTrailingPseudo(sel);
 
@@ -212,16 +223,18 @@
 					return transformed.join(", ");
 				};
 
+				console.time("[ZotFlow CSS Injection] Total Duration");
+				console.log("[ZotFlow CSS Injection] Starting CSS injection process...");
+
+				const tGetSheets = performance.now();
 				const cssChunks = [];
 				const appSheets = Array.from(
 					window.findParentWindow()?.document?.styleSheets || []
-				).filter(
-					(sheet) =>
-						sheet.href &&
-						sheet.href.startsWith(window.origin) &&
-						sheet.href.includes("app.css")
 				);
+				const tGetSheetsEnd = performance.now();
+				console.log(`[ZotFlow CSS Injection] Collected ${appSheets.length} stylesheets in ${(tGetSheetsEnd - tGetSheets).toFixed(2)}ms`);
 
+				const tProcessSheets = performance.now();
 				for (const sheet of appSheets) {
 					try {
 						cssChunks.push(
@@ -229,17 +242,40 @@
 						);
 					} catch (e) {
 						// Cross-origin or protected stylesheet will throw here.
+						perfMetrics.errors.push("Could not access stylesheet rules");
 						console.warn("Could not access stylesheet rules:", e);
 					}
 				}
+				const tProcessSheetsEnd = performance.now();
+				console.log(`[ZotFlow CSS Injection] Processed ${perfMetrics.ruleCount} style rules in ${(tProcessSheetsEnd - tProcessSheets).toFixed(2)}ms`);
+				console.log(`[ZotFlow CSS Injection] Prefixed ${perfMetrics.selectorCount} selectors`);
 
+				const tJoin = performance.now();
 				const cssText = cssChunks.join("\n");
+				const tJoinEnd = performance.now();
+				const cssTextKB = (cssText.length / 1024).toFixed(2);
+				console.log(`[ZotFlow CSS Injection] Joined CSS chunks (${cssTextKB}KB) in ${(tJoinEnd - tJoin).toFixed(2)}ms`);
+
+				const tConstruct = performance.now();
 				const constructed = new document.defaultView.CSSStyleSheet();
 				constructed.replaceSync(cssText);
+				const tConstructEnd = performance.now();
+				console.log(`[ZotFlow CSS Injection] Constructed CSSStyleSheet in ${(tConstructEnd - tConstruct).toFixed(2)}ms`);
+
+				const tApply = performance.now();
 				document.adoptedStyleSheets = [
 					...document.adoptedStyleSheets,
 					constructed,
 				];
+				const tApplyEnd = performance.now();
+				console.log(`[ZotFlow CSS Injection] Applied to document.adoptedStyleSheets in ${(tApplyEnd - tApply).toFixed(2)}ms`);
+
+				const totalDuration = performance.now() - perfMetrics.startTime;
+				console.timeEnd("[ZotFlow CSS Injection] Total Duration");
+
+				if (perfMetrics.errors.length > 0) {
+					console.warn(`[ZotFlow CSS Injection] ${perfMetrics.errors.length} error(s) encountered`);
+				}
 			})();
 		</script>
 
