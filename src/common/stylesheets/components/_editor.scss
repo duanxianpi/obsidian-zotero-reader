@@ -71,6 +71,12 @@
 			}
 		}
 	}
+
+	// ZotFlow: Avoid Minimal Theme override display to block
+	// which cause the focus area shrink to "Add comment" line
+	.obsidian-app .markdown-source-view .cm-sizer {
+		display: flex !important;
+	}
 }
 
 .preview {
