@@ -12,7 +12,10 @@ import { ObsidianBridge } from "./obsidian-adapter";
 
 export default class ZoteroReaderAdapter {
 	reader;
+
 	listeners = new Set();
+
+	disposePromise;
 
 	on(cb) {
 		this.listeners.add(cb);
@@ -408,6 +411,23 @@ export default class ZoteroReaderAdapter {
 	}
 
 	async dispose() {
-		this.reader = undefined;
+		if (this.disposePromise) return this.disposePromise;
+
+		this.disposePromise = (async () => {
+			const reader = this.reader;
+			try {
+				await reader?.destroy?.();
+			}
+			finally {
+				if (window._reader === reader) {
+					delete window._reader;
+				}
+				this.reader = undefined;
+				this.secondaryViewInitialized = false;
+				this.listeners.clear();
+			}
+		})();
+
+		return this.disposePromise;
 	}
 }

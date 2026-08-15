@@ -2020,9 +2020,14 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	}
 
 	destroy() {
+		// ZotFlow: Stop pending searches before detaching the document they reference.
+		this._find?.cancel();
 		this._overlayPopupDelayer.destroy();
 		this._annotationRenderRoot.unmount();
 		this._resizeObserver.disconnect();
+		// ZotFlow: Explicitly clear and detach the nested HTML/EPUB realm so its DOM and listeners can be collected.
+		this._iframeDocument.documentElement.replaceChildren();
+		this._iframe.remove();
 	}
 
 	// ***

@@ -52,6 +52,12 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 
 	readonly book: Book;
 
+	// ZotFlow: Split views borrow the primary view's Book and must not destroy it.
+	private readonly _ownsBook: boolean;
+
+	// ZotFlow: epub.js Book.destroy() is not safe to call more than once.
+	private _destroyed = false;
+
 	flow!: Flow;
 
 	flowMode!: FlowMode;
@@ -81,15 +87,18 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 	constructor(options: DOMViewOptions<EPUBViewState, EPUBViewData>) {
 		super(options);
 		if (options.data.buf) {
+			this._ownsBook = true;
 			this.book = Epub(options.data.buf.buffer);
 			delete this._options.data.buf;
 		}
 		else if (options.data.url) {
+			this._ownsBook = true;
 			this.book = Epub(options.data.url, {
 				openAs: 'epub'
 			});
 		}
 		else if (options.data.book) {
+			this._ownsBook = false;
 			this.book = options.data.book;
 		}
 		else {
@@ -1513,6 +1522,20 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 		}
 
 		this._iframe.classList.add('loaded');
+	}
+
+	override destroy() {
+		if (this._destroyed) return;
+		this._destroyed = true;
+
+		// ZotFlow: Release flow listeners and epub.js resources before removing the nested iframe.
+		this.flow?.destroy();
+		if (this._ownsBook) {
+			this.book.destroy();
+		}
+		this._rangeCache.clear();
+		this._hrefTargetCache.clear();
+		super.destroy();
 	}
 
 	setSidebarOpen(_sidebarOpen: boolean) {

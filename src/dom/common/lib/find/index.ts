@@ -7,6 +7,8 @@ import { ObsidianBridge } from "../../../../obsidian-adapter";
 
 export interface FindProcessor {
 	getAnnotations(): FindAnnotation[];
+	// ZotFlow: Viewer teardown cancels in-flight find work before detaching its document.
+	cancel(): void;
 }
 
 class DefaultFindProcessor implements FindProcessor {

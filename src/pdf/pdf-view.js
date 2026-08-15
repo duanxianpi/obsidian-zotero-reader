@@ -141,6 +141,7 @@ class PDFView {
 		this._scrolling = false;
 		this._readAloudPositionLocked = true;
 		this._readAloudScrolling = false;
+		this._destroyPromise = null;
 
 
 		// Create a MediaQueryList object
@@ -853,8 +854,37 @@ class PDFView {
 		}
 	}
 
+	// ZotFlow: Explicitly clean up reader to prevent memory leak
 	destroy() {
-		this._overlayPopupDelayer.destroy();
+		if (this._destroyPromise) return this._destroyPromise;
+
+		this._destroyPromise = (async () => {
+			this._overlayPopupDelayer.destroy();
+			clearTimeout(this._creationTimeout);
+			clearTimeout(this._readAloudSentenceTimeout);
+			clearTimeout(this._scrollTimeout);
+
+			const iframeWindow = this._iframeWindow;
+			const pdfApplication = iframeWindow?.PDFViewerApplication;
+			try {
+				await pdfApplication?.close?.();
+			}
+			catch (e) {
+				console.warn('Failed to close PDF.js cleanly', e);
+			}
+			finally {
+				if (window.PDFViewerApplication === pdfApplication) {
+					delete window.PDFViewerApplication;
+				}
+				if (window.if === iframeWindow) delete window.if;
+				if (this._options?.data) delete this._options.data.buf;
+				this._iframe.remove();
+				this._iframeWindow = null;
+				this._options = null;
+			}
+		})();
+
+		return this._destroyPromise;
 	}
 
 	focus() {

@@ -26,8 +26,10 @@ import { connect, WindowMessenger } from "penpal";
 		initBridge();
 
 		const readerAdapter = new ZoteroReaderAdapter();
+		let destroyed = false;
 		const childAPI = {
 			async initReader(opts) {
+				if (destroyed) return false;
 				readerAdapter.on((evt) => ObsidianBridge.handleEvent(evt));
 				// If the parent passed us an ArrayBuffer, we need to transfer the realm under us
 				if (opts.data.buf) {
@@ -58,7 +60,13 @@ import { connect, WindowMessenger } from "penpal";
 			async navigate(location) {
 				readerAdapter.navigate(location);
 				return true;
-			}
+			},
+			async destroy() {
+				if (destroyed) return true;
+				destroyed = true;
+				await readerAdapter.dispose();
+				return true;
+			},
 		};
 
 		registerChildAPI(childAPI);

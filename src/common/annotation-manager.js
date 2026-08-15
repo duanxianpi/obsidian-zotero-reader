@@ -382,6 +382,23 @@ class AnnotationManager {
 		this._triggerSaving();
 	}
 
+	// ZotFlow: we should flush all annotations before reader close
+	async flush() {
+		let previousSkipDebounce = this._skipAnnotationSavingDebounce;
+		this._skipAnnotationSavingDebounce = true;
+		try {
+			while (this._savingInProgress || this._unsavedAnnotations.size) {
+				while (this._savingInProgress) {
+					await new Promise(resolve => setTimeout(resolve, 0));
+				}
+				await this._triggerSaving();
+			}
+		}
+		finally {
+			this._skipAnnotationSavingDebounce = previousSkipDebounce;
+		}
+	}
+
 	_getAnnotationByID(id) {
 		return this._annotations.find(annotation => annotation.id === id);
 	}

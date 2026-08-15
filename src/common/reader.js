@@ -50,6 +50,8 @@ class Reader {
 		this._data = options.data;
 		this._password = options.password;
 		this._preview = options.preview;
+		this._destroyPromise = null; // ZotFlow
+		this._reactRoot = null; // ZotFlow
 
 		this._readerContext = { type: this._type, platform: this._platform };
 
@@ -331,7 +333,8 @@ class Reader {
 		}
 
 		if (!this._preview) {
-			createRoot(document.getElementById('reader-ui')).render(
+			this._reactRoot = createRoot(document.getElementById('reader-ui'));
+			this._reactRoot.render(
 				<ReaderContext.Provider value={this._readerContext}>
 					<ReaderUI
 						type={this._type}
@@ -493,6 +496,50 @@ class Reader {
 				}
 			});
 		}
+	}
+
+	// ZotFlow: Destroy the reader component to prevent memory leak
+	destroy() {
+		if (this._destroyPromise) return this._destroyPromise;
+
+		this._destroyPromise = (async () => {
+			try {
+				await this._annotationManager?.flush();
+			}
+			catch (e) {
+				console.warn('Failed to flush annotations while closing the reader', e);
+			}
+
+			this._readAloudManager?.destroy();
+			this._reactRoot?.unmount();
+			this._reactRoot = null;
+
+			await Promise.allSettled([
+				// ZotFlow: Destroy the borrowing split view before the primary releases the shared EPUB Book.
+				Promise.resolve(this._secondaryView?.destroy()),
+				Promise.resolve(this._primaryView?.destroy()),
+			]);
+
+			this._primaryView = null;
+			this._secondaryView = null;
+			if (this._data?.buf) delete this._data.buf;
+			this._data = null;
+			this._state = null;
+			this._tools = null;
+			this._annotationManager = null;
+			this._focusManager = null;
+			this._keyboardManager = null;
+			this._readAloudManager = null;
+			this._readerRef.current = null;
+
+			// Callback fields close over the Obsidian parent API. Clearing them is
+			// what makes the detached reader realm independent of the host again.
+			for (let key of Object.keys(this)) {
+				if (key.startsWith('_on')) this[key] = null;
+			}
+		})();
+
+		return this._destroyPromise;
 	}
 
 	_ensureType() {
