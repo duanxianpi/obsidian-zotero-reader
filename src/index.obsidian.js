@@ -1,5 +1,6 @@
 import ZoteroReaderAdapter from "./index.obsidian.reader.js";
 import {
+	disposeBridge,
 	initBridge,
 	ObsidianBridge,
 	registerChildAPI,
@@ -64,7 +65,15 @@ import { connect, WindowMessenger } from "penpal";
 			async destroy() {
 				if (destroyed) return true;
 				destroyed = true;
-				await readerAdapter.dispose();
+				try {
+					await readerAdapter.dispose();
+				}
+				finally {
+					// ZotFlow: The direct child API replaced Penpal RPC after the
+					// handshake; release its listener and parent-realm references.
+					disposeBridge();
+					connection.destroy();
+				}
 				return true;
 			},
 		};

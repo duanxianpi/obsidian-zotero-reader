@@ -537,6 +537,17 @@ class Reader {
 			for (let key of Object.keys(this)) {
 				if (key.startsWith('_on')) this[key] = null;
 			}
+
+			// ZotFlow: Containers and initialization promises otherwise retain
+			// the detached outer reader realm after all views have been destroyed.
+			for (const key of Object.keys(this)) {
+				if (key === '_destroyPromise') continue;
+				const value = this[key];
+				if ((typeof value === 'object' && value !== null)
+					|| typeof value === 'function') {
+					this[key] = null;
+				}
+			}
 		})();
 
 		return this._destroyPromise;

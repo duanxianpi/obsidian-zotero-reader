@@ -43,3 +43,11 @@ export function registerChildAPI(childAPI) {
 	registered = true;
 	return registerRef(childAPI, tokenRef).then(() => {});
 }
+
+// ZotFlow: Drop cross-realm references when the reader iframe is disposed.
+export function disposeBridge() {
+	ObsidianBridge = null;
+	registerRef = null;
+	tokenRef = null;
+	registered = false;
+}

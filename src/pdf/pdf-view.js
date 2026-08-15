@@ -145,17 +145,18 @@ class PDFView {
 
 
 		// Create a MediaQueryList object
-		let darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+		this._darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
 		// Initial check
 		// Don't need to check system's preferred color scheme, it will be brought from obsidian
 		// this._preferedColorTheme = darkModeMediaQuery.matches ? 'dark' : 'light';
 
 		// Listen for changes
-		darkModeMediaQuery.addEventListener('change', event => {
+		this._darkModeMediaQueryListener = (event) => {
 			this._preferedColorTheme = event.matches ? 'dark' : 'light';
 			this._updateColorScheme();
-		});
+		};
+		this._darkModeMediaQuery.addEventListener('change', this._darkModeMediaQueryListener);
 
 		this._updateColorScheme();
 
@@ -863,11 +864,35 @@ class PDFView {
 			clearTimeout(this._creationTimeout);
 			clearTimeout(this._readAloudSentenceTimeout);
 			clearTimeout(this._scrollTimeout);
+			// ZotFlow: matchMedia owns a native listener that can retain this view
+			// after its iframe has been detached.
+			this._darkModeMediaQuery?.removeEventListener('change', this._darkModeMediaQueryListener);
+			this._darkModeMediaQuery = null;
+			this._darkModeMediaQueryListener = null;
 
 			const iframeWindow = this._iframeWindow;
 			const pdfApplication = iframeWindow?.PDFViewerApplication;
+			const pdfLoadingTask = pdfApplication?.pdfLoadingTask;
 			try {
-				await pdfApplication?.close?.();
+				const closePromise = pdfApplication?.close?.();
+				if (closePromise) {
+					const transport = pdfLoadingTask?._transport;
+					if (transport?.destroyed && transport.destroyCapability) {
+						// ZotFlow: The Obsidian PDF worker does not answer PDF.js's
+						// Terminate request, leaving WorkerTransport.destroy() pending.
+						// Intervene only after PDF.js has entered its destroy path,
+						// and settle that request so PDF.js runs its own cleanup.
+						const messageHandler = transport.messageHandler;
+						const callbackID = messageHandler?.callbackId - 1;
+						const terminateCapability = messageHandler
+							?.callbackCapabilities?.[callbackID];
+						if (terminateCapability) {
+							delete messageHandler.callbackCapabilities[callbackID];
+							terminateCapability.resolve();
+						}
+					}
+					await closePromise;
+				}
 			}
 			catch (e) {
 				console.warn('Failed to close PDF.js cleanly', e);
@@ -878,9 +903,22 @@ class PDFView {
 				}
 				if (window.if === iframeWindow) delete window.if;
 				if (this._options?.data) delete this._options.data.buf;
+				// ZotFlow: Drop the nested PDF realm's DOM before detaching it.
+				this._iframe.contentDocument?.documentElement.replaceChildren();
 				this._iframe.remove();
 				this._iframeWindow = null;
 				this._options = null;
+				// ZotFlow: PDF.js listeners can retain this view through the
+				// detached inner realm. Drop every reference-type field once the
+				// view is unusable, while keeping the idempotent destroy promise.
+				for (const key of Object.keys(this)) {
+					if (key === '_destroyPromise') continue;
+					const value = this[key];
+					if ((typeof value === 'object' && value !== null)
+						|| typeof value === 'function') {
+						this[key] = null;
+					}
+				}
 			}
 		})();
 
