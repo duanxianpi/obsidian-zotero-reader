@@ -141,4 +141,3 @@ export async function getSDTPack(type, fileName, { onProgress } = {}) {
 		return { ok: false, reason: 'failed' };
 	}
 }
-
