@@ -12,7 +12,7 @@
 		"build:android": "PDFJS_CONFIG=mobile bash pdfjs/build && webpack --config-name android",
 		"start": "webpack-dev-server --mode development --config-name dev",
 		"view-dev": "PDFJS_CONFIG=mobile bash pdfjs/build && webpack-dev-server --mode development --config-name view-dev",
-		"test": "echo \"No tests yet\""
+		"test": "node --test test/pdf/native-text-selection-map.test.mjs"
 	},
 	"license": "AGPL-3.0",
 	"browserslist": [
@@ -29,6 +29,7 @@
 		"luaparse": "^0.3.1",
 		"mathjax-full": "^3.2.2",
 		"penpal": "^7.0.4",
+		"pako": "^1.0.11",
 		"postcss-selector-parser": "^6.0.13",
 		"prop-types": "^15.8.1",
 		"queue": "^6.0.2",

@@ -18,7 +18,7 @@ import PrintPopup from './modal-popup/print-popup';
 import AppearancePopup from "./modal-popup/appearance-popup";
 import ThemePopup from './modal-popup/theme-popup';
 import ReadAloudPopup from "./utility-popup/read-aloud-popup";
-import ReadAloudAnnotationPopup from "./view-popup/overlay-popup/read-aloud-annotation-popup";
+import ReadAloudAnnotationPopup from "./utility-popup/read-aloud-annotation-popup";
 import ReadAloudFirstRunPopup from './modal-popup/read-aloud-first-run-popup';
 import { bundle } from '../../fluent';
 
@@ -135,9 +135,11 @@ const ReaderUI = React.forwardRef((props, ref) => {
 						enableNavigateBack={viewStats.canNavigateBack}
 						enableNavigateToPreviousPage={viewStats.canNavigateToPreviousPage}
 						enableNavigateToNextPage={viewStats.canNavigateToNextPage}
-						readingModeEnabled={viewStats.readingModeEnabled}
+						readingModeEnabled={state.primaryReadingModeEnabled || state.secondaryReadingModeEnabled}
+						readingModeLoading={state.readingModeLoading}
 						appearancePopup={state.appearancePopup}
 						readAloudState={state.readAloudState}
+						sdtProgress={state.sdtProgress}
 						findPopupOpen={findState.popupOpen}
 						themes={state.themes}
 						onChangeTheme={props.onChangeTheme}
@@ -158,6 +160,7 @@ const ReaderUI = React.forwardRef((props, ref) => {
 						onChangeTool={props.onChangeTool}
 						onOpenColorContextMenu={props.onOpenColorContextMenu}
 						onToggleAppearancePopup={props.onToggleAppearancePopup}
+						onChangeReadingModeEnabled={props.onChangeReadingModeEnabled}
 						onToggleReadAloud={props.onToggleReadAloud}
 						onToggleFind={props.onToggleFind}
 						onToggleContextPane={props.onToggleContextPane}
@@ -235,6 +238,11 @@ const ReaderUI = React.forwardRef((props, ref) => {
 						colorScheme={state.colorScheme}
 						lightTheme={state.lightTheme}
 						darkTheme={state.darkTheme}
+						readingModeEnabled={state.primary || !state.splitType
+							? state.primaryReadingModeEnabled
+							: state.secondaryReadingModeEnabled}
+						readingModeLoading={state.readingModeLoading}
+						sdtProgress={state.sdtProgress}
 						splitType={state.splitType}
 						viewStats={viewStats}
 						onChangeSplitType={props.onChangeSplitType}

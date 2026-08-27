@@ -9,8 +9,10 @@ import {
 	OutlineItem,
 	OverlayPopupParams,
 	ViewStats,
+	Position,
 	WADMAnnotation
 } from "../../common/types";
+import type { StructuredDocumentText } from '../../../structured-document-text/schema';
 import Epub, { Book, EpubCFI, NavItem } from "epubjs";
 import {
 	getStartElement,
@@ -18,7 +20,7 @@ import {
 	PersistentRange,
 	splitRangeToTextNodes
 } from "../common/lib/range";
-import { FragmentSelector, FragmentSelectorConformsTo, isFragment, Selector } from "../common/lib/selector";
+import { FragmentSelector, FragmentSelectorConformsTo, isFragment, isSelector, Selector } from "../common/lib/selector";
 import { EPUBFindProcessor } from "./find";
 import DOMView, {
 	DOMViewOptions,
@@ -315,11 +317,11 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 	}
 
 	private _initOutline() {
-		let base = new Path(this.book.packaging.navPath || this.book.packaging.ncxPath || '');
+		let base = new Path(this.book.path.resolve(this.book.packaging.navPath || this.book.packaging.ncxPath || ''));
 		let toOutlineItem: (navItem: NavItem) => OutlineItem = navItem => ({
 			title: navItem.label,
 			location: {
-				href: base.resolve(navItem.href).replace(/^\//, '')
+				href: this.book.path.relative(base.resolve(navItem.href))
 			},
 			items: navItem.subitems?.map(toOutlineItem),
 			expanded: true,
@@ -454,7 +456,9 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 		};
 	}
 
-	override toDisplayedRange(selector: Selector): Range | null {
+	override toDisplayedRange(position: Position): Range | null {
+		if (!isSelector(position)) return null;
+		let selector = position;
 		switch (selector.type) {
 			case 'FragmentSelector': {
 				if (selector.conformsTo !== FragmentSelectorConformsTo.EPUB3) {
@@ -551,17 +555,10 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 
 		let pageLabel = this.pageMapping.isPhysical && this.pageMapping.getPageLabel(range) || '';
 
-		// Use the number of characters between the start of the section and the start of the selection range
-		// to disambiguate the sortIndex
-		let sectionContainer = closestElement(range.startContainer)?.closest('[data-section-index]');
-		if (!sectionContainer) {
+		let sortIndex = this._getSortIndex(range);
+		if (sortIndex === null) {
 			return null;
 		}
-		let sectionIndex = parseInt(sectionContainer.getAttribute('data-section-index')!);
-		let offsetRange = this._iframeDocument.createRange();
-		offsetRange.setStart(sectionContainer, 0);
-		offsetRange.setEnd(range.startContainer, range.startOffset);
-		let sortIndex = String(sectionIndex).padStart(5, '0') + '|' + String(offsetRange.toString().length).padStart(8, '0');
 		return {
 			type,
 			color,
@@ -572,11 +569,45 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 		};
 	}
 
+	private _getSortIndex(range: Range): string | null {
+		// Use the number of characters between the start of the section and the
+		// start of the range to disambiguate the sortIndex
+		let sectionContainer = closestElement(range.startContainer)?.closest('[data-section-index]');
+		if (!sectionContainer) {
+			return null;
+		}
+		let sectionIndex = parseInt(sectionContainer.getAttribute('data-section-index')!);
+		let offsetRange = this._iframeDocument.createRange();
+		offsetRange.setStart(sectionContainer, 0);
+		offsetRange.setEnd(range.startContainer, range.startOffset);
+		return String(sectionIndex).padStart(5, '0') + '|' + String(offsetRange.toString().length).padStart(8, '0');
+	}
+
+	getAnnotationMeta(position: Selector): { sortIndex: string; pageLabel: string } | null {
+		let range = this.toDisplayedRange(position);
+		if (!range) {
+			return null;
+		}
+		let sortIndex = this._getSortIndex(range);
+		if (sortIndex === null) {
+			return null;
+		}
+		let pageLabel = this.pageMapping.isPhysical && this.pageMapping.getPageLabel(range) || '';
+		return { sortIndex, pageLabel };
+	}
+
 	protected override _getRoots(includeUnmounted = false): HTMLElement[] {
 		return this._sectionRenderers.map(includeUnmounted
 			? (r => r.body)
 			: (r => r.container)
 		);
+	}
+
+	protected override _updateColorScheme() {
+		if (this._isFixedLayout) {
+			return;
+		}
+		super._updateColorScheme();
 	}
 
 	private _upsertAnnotation(annotation: NewAnnotation<WADMAnnotation>) {
@@ -785,6 +816,19 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 		this._iframe.classList.remove('mask-resizing');
 	}, 250);
 
+	protected override _tryResizeWidthInPlace(width: number): boolean {
+		if (!this.flow || this._isFixedLayout || !this.flow.canResizeWidthInPlace(width)) {
+			return false;
+		}
+		// The content stays put, so cancel any masked resize queued by an earlier tick of this gesture,
+		// drop the masking styles, and apply the real size immediately.
+		this._resizeIframeTrailing.cancel();
+		this._iframe.style.transform = '';
+		this._iframe.classList.remove('mask-resizing');
+		super._resizeIframeImmediate();
+		return true;
+	}
+
 	protected override _handleResize() {
 		if (!this.flow || document.hidden
 				|| (this._iframeWindow.innerWidth === this._lastIframeWindowWidth
@@ -904,7 +948,8 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 		}
 
 		let target = event.target as Element;
-		if (target.tagName === 'IMG'
+		if (!this._isFixedLayout
+				&& target.tagName === 'IMG'
 				&& target.classList.contains('clickable-image')
 				&& (target as HTMLImageElement).naturalWidth
 				&& (target as HTMLImageElement).naturalHeight) {
@@ -1439,6 +1484,27 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 		this.flow.navigateToLastPage();
 	}
 
+	// Top-level SDT block index for whatever's currently visible, or null.
+	// Used to pick the Read Aloud starting segment.
+	getVisibleBlockIndex(sdtData: StructuredDocumentText | null): number | null {
+		let cfi = this.flow.startCFI?.toString(true);
+		if (!cfi || !sdtData) return null;
+		// Walk back-to-front so we land on the latest block whose anchor's
+		// CFI is contained in the current page CFI range.
+		for (let i = sdtData.content.length - 1; i >= 0; i--) {
+			let block = sdtData.content[i];
+			if (block.flowClass === 'excluded' || !block.anchor
+					|| !('selectorMap' in block.anchor)
+					|| typeof block.anchor.selectorMap !== 'string') {
+				continue;
+			}
+			if (cfiStartsWithSelectorMap(cfi, block.anchor.selectorMap)) {
+				return i;
+			}
+		}
+		return null;
+	}
+
 	canNavigateToPreviousPage() {
 		return this.flow.canNavigateToPreviousPage();
 	}
@@ -1593,6 +1659,18 @@ class EPUBView extends DOMView<EPUBViewState, EPUBViewData> {
 		}
 		return a.compareDocumentPosition(b);
 	}
+}
+
+// Does `cfi` (assertion-free, with the `epubcfi(...)` wrapper) reach into the
+// path described by `selectorMap`? Treats selectorMap as a step-aligned prefix
+// so a different sibling step doesn't accidentally match via substring overlap.
+function cfiStartsWithSelectorMap(cfi: string, selectorMap: string): boolean {
+	let prefix = 'epubcfi(' + selectorMap;
+	if (!cfi.startsWith(prefix)) return false;
+	let next = cfi.charAt(prefix.length);
+	// '/' continues into a deeper step; ':' introduces an offset; ',' starts a
+	// CFI range; ')' closes the wrapper for an exact match.
+	return next === '' || next === '/' || next === ':' || next === ',' || next === ')';
 }
 
 type FlowMode = 'paginated' | 'scrolled';

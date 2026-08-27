@@ -163,18 +163,35 @@ replaced-body {
 			orphans: 2;
 			hyphens: auto;
 		}
+
+		:link {
+			color: var(--link-color) !important;
+		}
+
+		:visited {
+			color: var(--visited-link-color) !important;
+		}
+
+		img.clickable-image {
+			cursor: zoom-in;
+		}
+	}
+
+	body.fixed-layout & {
+		@media (pointer: coarse) {
+			// Text selection is pretty much unusable in fixed-layout EPUBs
+			// on mobile because the end handle constantly jumps to the start
+			// of the page, and the content is often made up of out-of-order
+			// absolute divs.
+			// We can hack around this when an annotation tool is selected, but
+			// just disable native selection to avoid trouble.
+			user-select: none;
+			-webkit-user-select: none;
+		}
 	}
 
 	a {
 		text-decoration: none;
-	}
-
-	:link {
-		color: var(--link-color) !important;
-	}
-
-	:visited {
-		color: var(--visited-link-color) !important;
 	}
 
 	.sup-like, .sub-like {
@@ -199,10 +216,6 @@ replaced-body {
 		aside[epub|type="note"] {
 			display: none;
 		}
-	}
-
-	img.clickable-image {
-		cursor: zoom-in;
 	}
 
 	section, div, p, [role="paragraph"], h1, h2, h3, h4, h5, h6, [role="heading"] {

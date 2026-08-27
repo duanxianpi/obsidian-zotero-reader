@@ -102,6 +102,10 @@ export abstract class ReadAloudController extends EventTarget {
 		// No-op for non-remote controllers
 	}
 
+	syncActiveWordToPlayback(): void {
+		// No-op for non-remote controllers (no word-level timestamps)
+	}
+
 	get error() {
 		return this._error;
 	}
@@ -110,13 +114,20 @@ export abstract class ReadAloudController extends EventTarget {
 
 	protected abstract get _segmentProgressSeconds(): number;
 
+	/**
+	 * Index into the active segment's timestamp array for the word currently
+	 * being spoken, or null if no word-level data is available. Updated by the
+	 * controller as audio plays.
+	 */
+	activeTimestampIndex: number | null = null;
+
 	protected get _currentSegment() {
 		return this._segments[this._position];
 	}
 
 	getSegmentToAnnotate(): ReadAloudSegment | null {
-		// If less than 50% or 3 seconds into the current segment, use the previous one
-		if (this._segmentProgressFraction < 0.5 || this._segmentProgressSeconds < 3) {
+		// If less than 50% and less than 3 seconds into the current segment, use the previous one
+		if (this._segmentProgressFraction < 0.5 && this._segmentProgressSeconds < 3) {
 			let previousIndex = this._position - 1;
 			if (previousIndex >= 0) {
 				return this._segments[previousIndex];
@@ -135,6 +146,13 @@ export abstract class ReadAloudController extends EventTarget {
 		this._forwardStopIndex = forwardStopIndex;
 
 		this._segments = segments;
+	}
+
+	private _scheduleSpeak(delay: number) {
+		this._delayTimeout = setTimeout(() => {
+			this._delayTimeout = null;
+			this._speak();
+		}, delay);
 	}
 
 	override dispatchEvent(event: Event): boolean {
@@ -254,10 +272,7 @@ export abstract class ReadAloudController extends EventTarget {
 				if (this._currentSegment?.anchor === 'paragraphStart') {
 					delay += DELAY_PARAGRAPH;
 				}
-				this._delayTimeout = setTimeout(() => {
-					this._delayTimeout = null;
-					this._speak();
-				}, delay);
+				this._scheduleSpeak(delay);
 			}
 		}
 	}

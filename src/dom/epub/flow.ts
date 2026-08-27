@@ -3,7 +3,7 @@ import { debounce } from "../../common/lib/debounce";
 import { NavigateOptions } from "../common/dom-view";
 import { closestAll, closestElement, isRTL, isVertical, iterateWalker } from "../common/lib/nodes";
 import EPUBView, { SpreadMode } from "./epub-view";
-import { getBoundingPageRect, PersistentRange } from "../common/lib/range";
+import { getBoundingPageRect, getVisibleRect, PersistentRange } from "../common/lib/range";
 import { isSafari } from "../../common/lib/utilities";
 import { getSelectionRanges } from "../common/lib/selection";
 import { isPageRectVisible, rectContainsPoint } from "../common/lib/rect";
@@ -49,6 +49,13 @@ export interface Flow {
 
 	setSpreadMode(spreadMode: SpreadMode): void;
 
+	/**
+	 * Whether resizing the iframe to the given width would only change the horizontal margins around
+	 * the content, leaving the content layout (and so the reading position) unchanged. When true, the
+	 * view can skip the resize masking and position restoration.
+	 */
+	canResizeWidthInPlace(newWidth: number): boolean;
+
 	destroy(): void;
 }
 
@@ -62,6 +69,10 @@ abstract class AbstractFlow implements Flow {
 	protected _cachedStartCFI: EpubCFI | null = null;
 
 	protected _cachedStartCFIOffset: number | null = null;
+
+	protected _suppressAnchorRefreshUntil = 0;
+
+	protected static readonly ANCHOR_REFRESH_SUPPRESSION_MS = 200;
 
 	protected _iframe: HTMLIFrameElement;
 
@@ -162,12 +173,18 @@ abstract class AbstractFlow implements Flow {
 	}
 
 	/**
-	 * Return a range before or at the top of the viewport.
+	 * Return a range at or before the top of the viewport.
 	 *
 	 * @param renderer
-	 * @param textNodesOnly Return only text nodes, for constructing CFIs
+	 * @param textNodesOnly Return only text nodes, skipping images
+	 * @param requireStartInView Only accept a node whose start is within the viewport,
+	 *   never one that starts earlier and flows in
 	 */
-	protected _getFirstVisibleRange(renderer: SectionRenderer, textNodesOnly: boolean): Range | null {
+	protected _getFirstVisibleRange(
+		renderer: SectionRenderer,
+		textNodesOnly: boolean,
+		requireStartInView = false
+	): Range | null {
 		if (!renderer.mounted) {
 			return null;
 		}
@@ -206,13 +223,16 @@ abstract class AbstractFlow implements Flow {
 				crossAxisRectEnd = this._iframe.clientHeight - crossAxisRectEnd;
 			}
 			// If the range starts past the end of the viewport, we've gone too far -- return our previous best guess
+			// (or nothing, if the caller only wants a node that starts in view)
 			if (mainAxisRectStart > mainAxisViewportEnd || crossAxisRectStart > crossAxisViewportEnd) {
-				return bestRange;
+				return requireStartInView ? null : bestRange;
 			}
-			// If it starts in the viewport, return it immediately
+			// If it starts in the viewport, return it immediately.
+			// Unless requireStartInView is set, a node that starts just before
+			// the viewport but flows into it counts too.
 			if (
-				(mainAxisRectStart >= 0 || mainAxisRectStart < 0 && mainAxisRectEnd > 0)
-				&& (crossAxisRectStart >= 0 || crossAxisRectStart < 0 && crossAxisRectEnd > 0)
+				(mainAxisRectStart >= 0 || !requireStartInView && mainAxisRectStart < 0 && mainAxisRectEnd > 0)
+				&& (crossAxisRectStart >= 0 || !requireStartInView && crossAxisRectStart < 0 && crossAxisRectEnd > 0)
 			) {
 				return range;
 			}
@@ -295,6 +315,9 @@ abstract class AbstractFlow implements Flow {
 	}
 
 	protected _refreshUserAnchorAfterScroll = debounce(() => {
+		if (Date.now() < this._suppressAnchorRefreshUntil) {
+			return;
+		}
 		this._refreshUserAnchor();
 	}, 100);
 
@@ -314,6 +337,10 @@ abstract class AbstractFlow implements Flow {
 	}
 
 	abstract setSpreadMode(spreadMode: SpreadMode): void;
+
+	canResizeWidthInPlace(_newWidth: number): boolean {
+		return false;
+	}
 }
 
 interface Options {
@@ -363,7 +390,8 @@ export class ScrolledFlow extends AbstractFlow {
 	}
 
 	scrollIntoView(target: Range | PersistentRange | HTMLElement, options?: NavigateOptions): void {
-		let rect = (target instanceof PersistentRange ? target.toRange() : target).getBoundingClientRect();
+		let targetRange = target instanceof PersistentRange ? target.toRange() : target;
+		let rect = 'nodeType' in targetRange ? targetRange.getBoundingClientRect() : getVisibleRect(targetRange);
 
 		if (options?.ifNeeded && isPageRectVisible(
 			getBoundingPageRect(target),
@@ -422,9 +450,8 @@ export class ScrolledFlow extends AbstractFlow {
 	}
 
 	private _settleAnchorAfterProgrammaticScroll(options?: NavigateOptions) {
-		// scroll should have fired before this, so cancel
-		// the debounced refresh that triggered
 		this._refreshUserAnchorAfterScroll.cancel();
+		this._suppressAnchorRefreshUntil = Date.now() + AbstractFlow.ANCHOR_REFRESH_SUPPRESSION_MS;
 		if (!options?.keepAnchor) {
 			this._refreshUserAnchor();
 		}
@@ -536,14 +563,17 @@ export class ScrolledFlow extends AbstractFlow {
 
 	protected _updateUserAnchor(): void {
 		for (let renderer of this._visibleRenderers()) {
-			let startCFIRange = this._getFirstVisibleRange(renderer, true);
+			let startCFIRange = this._getFirstVisibleRange(renderer, false);
 			if (!startCFIRange) continue;
-			// CFIs should be calculated based on the start of the range, so collapse to the
-			// start. The offset is the Y coord of that point in the viewport, which we use
-			// to restore scroll position precisely after a resize.
-			startCFIRange.collapse(true);
+			// Collapse a text range to its start, but keep an image range
+			// whole so the CFI captures the element's box
+			if (startCFIRange.startContainer.nodeType === Node.TEXT_NODE) {
+				startCFIRange.collapse(true);
+			}
 			this._cachedStartCFI = new EpubCFI(startCFIRange, renderer.section.cfiBase);
-			let rect = startCFIRange.getBoundingClientRect();
+			// Store the top of that anchor's distance from the viewport edge,
+			// so we can restore scroll position precisely later
+			let rect = getVisibleRect(startCFIRange);
 			this._cachedStartCFIOffset = isVertical(renderer.body) ? rect.left : rect.top;
 			break;
 		}
@@ -552,11 +582,33 @@ export class ScrolledFlow extends AbstractFlow {
 	setSpreadMode() {
 		// No-op
 	}
+
+	override canResizeWidthInPlace(newWidth: number): boolean {
+		// In vertical writing mode a horizontal resize changes the block-flow axis, so the content reflows.
+		if (this._isVertical) {
+			return false;
+		}
+		// Section containers are capped at the page width and centered with auto margins. If the content
+		// isn't filling the available width, the resize is absorbed by those margins - the text doesn't
+		// rewrap and the scroll position holds - as long as it doesn't shrink past the content.
+		let sectionsContainer = this._iframeDocument.body.querySelector(':scope > .sections') as HTMLElement | null;
+		let contentEl = sectionsContainer?.querySelector(
+			':scope > .section-container:not(.hidden)'
+		) as HTMLElement | null;
+		if (!sectionsContainer || !contentEl) {
+			return false;
+		}
+		let slack = sectionsContainer.clientWidth - contentEl.offsetWidth;
+		let delta = newWidth - this._iframe.clientWidth;
+		return slack > EPSILON_PX && slack + delta >= 0;
+	}
 }
 
 const PAGE_TURN_SWIPE_LENGTH_PX = 100;
 const PAGE_TURN_TAP_MARGIN_FRACTION = 0.2;
 const EPSILON_PX = 10;
+// Viewport width at/below which _paginated.scss reduces --block-margin
+const BLOCK_MARGIN_BREAKPOINT_PX = 800;
 
 export class PaginatedFlow extends AbstractFlow {
 	private _sectionsContainer: HTMLElement;
@@ -568,6 +620,10 @@ export class PaginatedFlow extends AbstractFlow {
 	private _touchStartX = 0;
 
 	private _touchStartY = 0;
+
+	private _touchLastX = 0;
+
+	private _touchLastY = 0;
 
 	private _currentSectionIndex!: number;
 
@@ -584,7 +640,7 @@ export class PaginatedFlow extends AbstractFlow {
 		this._iframeDocument.documentElement.addEventListener('pointerdown', this._handlePointerDown);
 		this._iframeDocument.documentElement.addEventListener('pointermove', this._handlePointerMove);
 		this._iframeDocument.documentElement.addEventListener('pointerup', this._handlePointerUp);
-		this._iframeDocument.documentElement.addEventListener('pointerout', this._handlePointerCancel);
+		this._iframeDocument.documentElement.addEventListener('pointerout', this._handlePointerOut);
 		this._iframeDocument.documentElement.addEventListener('pointercancel', this._handlePointerCancel);
 		this._iframeDocument.documentElement.addEventListener('wheel', this._handleWheel, { passive: false });
 		this._iframeDocument.documentElement.addEventListener('selectionchange', this._handleSelectionChange);
@@ -598,7 +654,7 @@ export class PaginatedFlow extends AbstractFlow {
 		this._iframeDocument.documentElement.removeEventListener('pointerdown', this._handlePointerDown);
 		this._iframeDocument.documentElement.removeEventListener('pointermove', this._handlePointerMove);
 		this._iframeDocument.documentElement.removeEventListener('pointerup', this._handlePointerUp);
-		this._iframeDocument.documentElement.removeEventListener('pointerout', this._handlePointerCancel);
+		this._iframeDocument.documentElement.removeEventListener('pointerout', this._handlePointerOut);
 		this._iframeDocument.documentElement.removeEventListener('pointercancel', this._handlePointerCancel);
 		this._iframeDocument.documentElement.removeEventListener('wheel', this._handleWheel);
 		this._iframeDocument.documentElement.removeEventListener('selectionchange', this._handleSelectionChange);
@@ -684,7 +740,12 @@ export class PaginatedFlow extends AbstractFlow {
 			return;
 		}
 
-		let rect = (target instanceof PersistentRange ? target.toRange() : target).getBoundingClientRect();
+		let domTarget = target instanceof PersistentRange ? target.toRange() : target;
+		let rect = 'nodeType' in domTarget ? domTarget.getBoundingClientRect() : getVisibleRect(domTarget);
+		if (!('nodeType' in domTarget) && !(rect.width || rect.height)) {
+			// A range in unrendered content has no position to scroll to
+			return;
+		}
 		let containerRect = this._sectionsContainer.getBoundingClientRect();
 		let internalX = rect.x - containerRect.x;
 		let internalY = rect.y - containerRect.y;
@@ -871,9 +932,9 @@ export class PaginatedFlow extends AbstractFlow {
 				|| (event.composedPath()[0] as Element).closest('.annotation-container')) {
 			return;
 		}
-		// Safari: Ignore touches near a selection, because Safari still sends pointer events
-		// for selection handle drags
-		if (isSafari) {
+		// Mobile: Ignore touches near a selection, because Safari and Android
+		// WebView still send pointer events for selection handle drags
+		if (window.matchMedia('(pointer: coarse)').matches) {
 			let selectionRect = getSelectionRanges(this._iframeWindow.getSelection()!)[0]
 				?.getBoundingClientRect();
 			if (selectionRect && selectionRect.width && selectionRect.height) {
@@ -891,6 +952,8 @@ export class PaginatedFlow extends AbstractFlow {
 		this._touchDown = true;
 		this._touchStartX = event.clientX;
 		this._touchStartY = event.clientY;
+		this._touchLastX = event.clientX;
+		this._touchLastY = event.clientY;
 	};
 
 	private _handlePointerMove = (event: PointerEvent) => {
@@ -900,6 +963,11 @@ export class PaginatedFlow extends AbstractFlow {
 				|| !this._iframeDocument.getSelection()!.isCollapsed) {
 			return;
 		}
+		// Track the latest position so we can complete the swipe even if the
+		// gesture ends via pointercancel/pointerout (which can have unreliable
+		// coordinates when pen is used) instead of pointerup
+		this._touchLastX = event.clientX;
+		this._touchLastY = event.clientY;
 		let swipeAmount = (event.clientX - this._touchStartX) / PAGE_TURN_SWIPE_LENGTH_PX;
 		// If on the first/last page, clamp the CSS variable so the indicator doesn't expand all the way
 		if (swipeAmount < 0 && !this.canNavigateRight()) {
@@ -918,37 +986,8 @@ export class PaginatedFlow extends AbstractFlow {
 				|| !this._iframeDocument.getSelection()!.isCollapsed) {
 			return;
 		}
-		this._swipeIndicators.style.setProperty('--swipe-amount', '0');
-		this._touchDown = false;
-
-		// Switch pages after swiping
-		let swipeAmount = (event.clientX - this._touchStartX) / PAGE_TURN_SWIPE_LENGTH_PX;
-		if (swipeAmount <= -1) {
-			this._onManualNavigation();
-			this.navigateRight();
+		if (this._endSwipe(event.clientX, event.clientY, event.target as Element)) {
 			event.preventDefault();
-		}
-		else if (swipeAmount >= 1) {
-			this._onManualNavigation();
-			this.navigateLeft();
-			event.preventDefault();
-		}
-		// If there's no selection, allow single-tap page turns
-		else if (this._iframeWindow.getSelection()!.isCollapsed
-				&& !this._view.selectedAnnotationIDs.length
-				&& Math.abs(event.clientX - this._touchStartX) < EPSILON_PX
-				&& Math.abs(event.clientY - this._touchStartY) < EPSILON_PX
-				&& !(event.target as Element).closest('a, .clickable-image')) {
-			if (event.clientX >= this._iframeWindow.innerWidth * (1 - PAGE_TURN_TAP_MARGIN_FRACTION)) {
-				this._onManualNavigation();
-				this.navigateRight();
-				event.preventDefault();
-			}
-			else if (event.clientX <= this._iframeWindow.innerWidth * PAGE_TURN_TAP_MARGIN_FRACTION) {
-				this._onManualNavigation();
-				this.navigateLeft();
-				event.preventDefault();
-			}
 		}
 	};
 
@@ -958,9 +997,61 @@ export class PaginatedFlow extends AbstractFlow {
 			// No event.buttons check - "buttons" have now been released
 			return;
 		}
-		this._touchDown = false;
-		this._swipeIndicators.style.setProperty('--swipe-amount', '0');
+		// WebKit dispatches pointercancel instead of pointerup at the end of
+		// some pen swipes (#213), so complete the swipe here too. The event's
+		// own coordinates are unreliable on cancel, so use the last position
+		// reported during the move.
+		this._endSwipe(this._touchLastX, this._touchLastY, null);
 	};
+
+	private _handlePointerOut = (event: PointerEvent) => {
+		// pointerout bubbles as the pointer crosses element boundaries mid-drag,
+		// so only treat it as the end of the gesture when the pointer leaves the
+		// document entirely
+		if (!this._touchDown
+				|| !event.isPrimary
+				|| event.relatedTarget) {
+			return;
+		}
+		this._endSwipe(this._touchLastX, this._touchLastY, null);
+	};
+
+	private _endSwipe(clientX: number, clientY: number, target: Element | null): boolean {
+		this._swipeIndicators.style.setProperty('--swipe-amount', '0');
+		this._touchDown = false;
+
+		// Switch pages after swiping
+		let swipeAmount = (clientX - this._touchStartX) / PAGE_TURN_SWIPE_LENGTH_PX;
+		if (swipeAmount <= -1) {
+			this._onManualNavigation();
+			this.navigateRight();
+			return true;
+		}
+		else if (swipeAmount >= 1) {
+			this._onManualNavigation();
+			this.navigateLeft();
+			return true;
+		}
+		// If there's no selection, allow single-tap page turns
+		else if (target
+				&& this._iframeWindow.getSelection()!.isCollapsed
+				&& !this._view.selectedAnnotationIDs.length
+				&& Math.abs(clientX - this._touchStartX) < EPSILON_PX
+				&& Math.abs(clientY - this._touchStartY) < EPSILON_PX
+				&& !target.closest('a, .clickable-image')) {
+			if (clientX >= this._iframeWindow.innerWidth * (1 - PAGE_TURN_TAP_MARGIN_FRACTION)) {
+				this._onManualNavigation();
+				this.navigateRight();
+				return true;
+			}
+			else if (clientX <= this._iframeWindow.innerWidth * PAGE_TURN_TAP_MARGIN_FRACTION) {
+				this._onManualNavigation();
+				this.navigateLeft();
+				return true;
+			}
+		}
+		return false;
+	}
 
 	private _handleWheel = debounce((event: WheelEvent) => {
 		for (let tableParent of closestAll(event.target as Element, 'table, .table-like')) {
@@ -980,6 +1071,9 @@ export class PaginatedFlow extends AbstractFlow {
 	}, 100, { leading: true, trailing: false, maxWait: 400 });
 
 	private _handleSelectionChange = () => {
+		if (this._iframeDocument.getSelection()!.isCollapsed) {
+			return;
+		}
 		this._swipeIndicators.style.setProperty('--swipe-amount', '0');
 		this._touchDown = false;
 	};
@@ -1011,17 +1105,86 @@ export class PaginatedFlow extends AbstractFlow {
 
 	protected _updateUserAnchor(): void {
 		for (let renderer of this._visibleRenderers()) {
-			let range = this._getFirstVisibleRange(renderer, true);
+			let range = this._getFirstVisibleRange(renderer, false, true)
+				// Nothing begins on this page, meaning it's filled by the middle of one long block
+				?? this._getMidBlockPageStart(renderer);
 			if (!range) continue;
-			range.collapse(true);
+			// Collapse a text range to its start, but keep an image range
+			// whole so the CFI captures the element's box
+			if (range.startContainer.nodeType === Node.TEXT_NODE) {
+				range.collapse(true);
+			}
 			this._cachedStartCFI = new EpubCFI(range, renderer.section.cfiBase);
 			this._cachedStartCFIOffset = 0;
 			break;
 		}
 	}
 
+	private _getMidBlockPageStart(renderer: SectionRenderer): Range | null {
+		let straddling = this._getFirstVisibleRange(renderer, false);
+		if (!straddling || straddling.startContainer.nodeType !== Node.TEXT_NODE) {
+			return null;
+		}
+		let node = straddling.startContainer;
+		let length = node.nodeValue?.length ?? 0;
+		let containerRect = this._sectionsContainer.getBoundingClientRect();
+		let spread = this._isVertical ? this._spreadHeight : this._spreadWidth;
+		let currentPage = Math.round((this._isVertical ? this._offsetTop : this._offsetLeft) / spread);
+		let columnOf = (offset: number) => {
+			let charRange = this._iframeDocument.createRange();
+			charRange.setStart(node, offset);
+			charRange.setEnd(node, Math.min(offset + 1, length));
+			let rect = charRange.getBoundingClientRect();
+			let internal = this._isVertical ? rect.top - containerRect.top : rect.left - containerRect.left;
+			return Math.floor(internal / spread);
+		};
+		let lo = 0;
+		let hi = length;
+		while (lo < hi) {
+			let mid = (lo + hi) >> 1;
+			if (columnOf(mid) < currentPage) {
+				lo = mid + 1;
+			}
+			else {
+				hi = mid;
+			}
+		}
+		if (lo >= length || columnOf(lo) !== currentPage) {
+			return null;
+		}
+		let range = this._iframeDocument.createRange();
+		range.setStart(node, lo);
+		range.collapse(true);
+		return range;
+	}
+
 	setSpreadMode(spreadMode: SpreadMode) {
 		this._sectionsContainer.classList.toggle('spread-mode-none', spreadMode === SpreadMode.None);
 		this._sectionsContainer.classList.toggle('spread-mode-odd', spreadMode === SpreadMode.Odd);
+	}
+
+	override canResizeWidthInPlace(newWidth: number): boolean {
+		// In vertical writing mode a horizontal resize changes the page (block-flow) axis, so it reflows.
+		if (this._isVertical) {
+			return false;
+		}
+		// At the start of a section the offset is zero, so the section start stays pinned to the top-left
+		// however the columns reflow - the position is preserved even when the content fills the width.
+		if (this.atStartOfSection()) {
+			return true;
+		}
+		// Crossing the 800px viewport breakpoint (see _paginated.scss) halves --block-margin from 40px to
+		// 20px, which changes the column height and reflows the content, so it can't be done in place.
+		if ((this._iframe.clientWidth <= BLOCK_MARGIN_BREAKPOINT_PX) !== (newWidth <= BLOCK_MARGIN_BREAKPOINT_PX)) {
+			return false;
+		}
+		// .sections is capped by its column/page width and centered in the body with auto margins. If it
+		// isn't filling the body, a horizontal resize only grows or shrinks those margins - the columns
+		// keep their width and the current page stays put - as long as the margins don't run out. When
+		// the content fills the body (full page width, two-page spreads), the columns reflow and the
+		// number of columns can change, so we can't resize in place.
+		let slack = this._iframeDocument.body.clientWidth - this._sectionsContainer.offsetWidth;
+		let delta = newWidth - this._iframe.clientWidth;
+		return slack > EPSILON_PX && slack + delta >= 0;
 	}
 }

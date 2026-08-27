@@ -112,17 +112,17 @@ export class KeyboardManager {
 				this._reader.moveReadAloudAnnotation('next', event.shiftKey);
 				return;
 			}
-			if (code.startsWith('Digit')) {
-				let idx = parseInt(code.slice(5)) - 1;
+			if (/^\d$/.test(key)) {
+				let idx = parseInt(key) - 1;
 				if (ANNOTATION_COLORS[idx]) {
 					event.preventDefault();
 					this._reader.setReadAloudAnnotationColor(ANNOTATION_COLORS[idx][1]);
 					return;
 				}
 			}
-			if (key === 'h' || key === 'H' || key === 'u' || key === 'U') {
+			if (key === 'h' || key === 'u') {
 				event.preventDefault();
-				this._reader.setReadAloudAnnotationType(key === 'h' || key === 'H' ? 'highlight' : 'underline');
+				this._reader.setReadAloudAnnotationType(key === 'h' ? 'highlight' : 'underline');
 				return;
 			}
 		}
@@ -266,15 +266,17 @@ export class KeyboardManager {
 				}
 			}
 		}
-		else if ((view || sidebarAnnotationFocused) && key === `${pm}-z`) {
+		// Only handle undo/redo shortcuts internally if the embedding
+		// Zotero instance isn't tracking undo history itself
+		else if ((view || sidebarAnnotationFocused) && key === `${pm}-z`
+				&& !this._reader._externalUndoHistory) {
 			event.preventDefault();
-			this._reader._annotationManager.undo();
-			this._reader.setSelectedAnnotations([]);
+			this._reader.undo();
 		}
-		else if ((view || sidebarAnnotationFocused) && key === `${pm}-Shift-z`) {
+		else if ((view || sidebarAnnotationFocused) && key === `${pm}-Shift-z`
+				&& !this._reader._externalUndoHistory) {
 			event.preventDefault();
-			this._reader._annotationManager.redo();
-			this._reader.setSelectedAnnotations([]);
+			this._reader.redo();
 		}
 		else if (key === `${pm}-f`) {
 			event.preventDefault();
@@ -301,6 +303,16 @@ export class KeyboardManager {
 		// 	event.stopPropagation();
 		// 	this._reader.print();
 		// }
+		else if (key === `${pm}-Shift-r` || key === `${pm}-Shift-l`) {
+			event.preventDefault();
+			event.stopPropagation();
+			if (readAloudActive && !this._reader.getSelectionPosition()) {
+				this._reader.toggleReadAloudPopup(false);
+			}
+			else {
+				this._reader.startReadAloudAtPosition();
+			}
+		}
 		else if (key === `${pm}-=` || key === `${pm}-+` || code === `${pm}-NumpadAdd`) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -376,7 +388,7 @@ export class KeyboardManager {
 			}
 		}
 
-		if (!isTextBox(event.target)) {
+		if (!isTextBox(event.target) && !this._reader._state.contextMenu) {
 			if (code === 'Alt-Digit1') {
 				this._reader.toggleTool('highlight');
 			}
@@ -417,21 +429,11 @@ export class KeyboardManager {
 					this._reader.setTool({ color: ANNOTATION_COLORS[idx][1] });
 				}
 			}
-			else if (this._reader._type === 'pdf' && key === 'h' && !this._reader._readAloudManager.active) {
+			else if (this._reader._type === 'pdf' && key === 'h' && !readAloudActive) {
 				this._reader.toggleHandTool();
 			}
 			else if (this._reader._type === 'pdf' && key === 's') {
 				this._reader.setTool({ type: 'pointer' });
-			}
-			else if (code === 'KeyR' || code === 'KeyL') {
-				event.preventDefault();
-				event.stopPropagation();
-				if (this._reader._readAloudManager.active && !this._reader.getSelectionPosition()) {
-					this._reader.toggleReadAloudPopup(false);
-				}
-				else {
-					this._reader.startReadAloudAtPosition();
-				}
 			}
 			else if (readAloudActive && !event.target.matches('button, select')) {
 				if (key === 'Space') {
@@ -442,35 +444,35 @@ export class KeyboardManager {
 				else if (key === `Alt-${arrowPrev}` || key === `Alt-Shift-${arrowPrev}`) {
 					event.preventDefault();
 					event.stopPropagation();
-					this._reader._readAloudManager.skipBack('sentence', event.shiftKey);
+					this._reader._readAloudManager.skipBack('paragraph', event.shiftKey);
 					this._reader._lockPositionToReadAloud();
 				}
 				else if (key === `Alt-${arrowNext}` || key === `Alt-Shift-${arrowNext}`) {
 					event.preventDefault();
 					event.stopPropagation();
-					this._reader._readAloudManager.skipAhead('sentence', event.shiftKey);
+					this._reader._readAloudManager.skipAhead('paragraph', event.shiftKey);
 					this._reader._lockPositionToReadAloud();
 				}
 				else if (key === arrowPrev || key === `Shift-${arrowPrev}`) {
 					event.preventDefault();
 					event.stopPropagation();
-					this._reader._readAloudManager.skipBack('paragraph', event.shiftKey);
+					this._reader._readAloudManager.skipBack('sentence', event.shiftKey);
 					this._reader._lockPositionToReadAloud();
 				}
 				else if (key === arrowNext || key === `Shift-${arrowNext}`) {
 					event.preventDefault();
 					event.stopPropagation();
-					this._reader._readAloudManager.skipAhead('paragraph', event.shiftKey);
+					this._reader._readAloudManager.skipAhead('sentence', event.shiftKey);
 					this._reader._lockPositionToReadAloud();
 				}
-				else if (key === 'h' || key === 'H' || key === 'u' || key === 'U') {
+				else if (key === 'h' || key === 'u') {
 					event.preventDefault();
 					event.stopPropagation();
 					let segment = this._reader._readAloudManager.getSegmentToAnnotate();
 					if (segment) {
 						this._reader.addAnnotationFromReadAloudSegment(
 							segment,
-							key === 'h' || key === 'H' ? 'highlight' : 'underline'
+							key === 'h' ? 'highlight' : 'underline'
 						);
 					}
 				}

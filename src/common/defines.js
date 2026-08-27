@@ -27,10 +27,16 @@ export const READ_ALOUD_ACTIVE_SENTENCE_COLOR = READ_ALOUD_BASE_COLOR + '4d';
 export const PDF_NOTE_DIMENSIONS = 22; // pt
 export const MIN_IMAGE_ANNOTATION_SIZE = 10; // pt
 export const MIN_TEXT_ANNOTATION_WIDTH = 10; // pt
+export const PDF_READING_MODE_CROP_DISPLAY_SCALE = 1.25;
 
 export const DEBOUNCE_STATE_CHANGE = 300; // ms
 export const DEBOUNCE_STATS_CHANGE = 100; // ms
 export const DEBOUNCE_FIND_POPUP_INPUT = 500; // ms
+
+// How long the reader has to stay hidden before all its rendered pages are
+// released. Long enough to keep switching between tabs instant, while resuming
+// after that only costs a ~60 ms re-render of the visible pages
+export const SUSPEND_WHEN_HIDDEN_AFTER = 60000; // ms
 
 export const FIND_RESULT_COLOR_ALL_LIGHT = 'rgba(180,0,170,0.3)';
 export const FIND_RESULT_COLOR_CURRENT_LIGHT = 'rgba(0,100,0,0.3)';

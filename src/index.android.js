@@ -13,6 +13,8 @@ function sendToPort(handlerName, message) {
 onmessage = function (e) {
 	if (e.data == 'initPort') {
 		port = e.ports[0];
+		// Notify when iframe and port are loaded
+		postMessage('onInitialized');
 	}
 };
 
@@ -24,36 +26,36 @@ function log(data) {
 	sendToPort("logHandler", data);
 }
 
-function decodeBase64(base64) {
+function base64ToBytes(base64) {
 	const text = atob(base64);
 	const length = text.length;
 	const bytes = new Uint8Array(length);
 	for (let i = 0; i < length; i++) {
 		bytes[i] = text.charCodeAt(i);
 	}
+	return bytes;
+}
+
+function decodeBase64(base64) {
 	const decoder = new TextDecoder();
-	return decoder.decode(bytes);
+	return decoder.decode(base64ToBytes(base64));
 }
 
 window.createView = (encodedOptions) => {
 	const options = JSON.parse(decodeBase64(encodedOptions));
 	log("Create " + options.type + " view");
-	const annotations = options.annotations;
-	log("Loaded " + annotations.length + " annotations");
+	log("Loaded " + options.annotations.length + " annotations");
+
+	let url = new URL(options.url).toString();
+	delete options.url;
 	window._view = new View({
+		...options,
 		platform: 'android',
-		type: options.type,
-		annotations: annotations,
-		viewState: options.viewState,
-		location: options.location,
-		password: options.password,
-		pageLabels: options.pageLabels,
 		container: document.getElementById('view'),
-		penConnected: options.penConnected,
 		penActive: false,
-		penExclusive: options.penExclusive,
-		data: {
-			url: new URL(options.url).toString()
+		data: { url },
+		onInitialized: () => {
+			postMessage('onViewContentInitialized');
 		},
 		onSaveAnnotations: (annotations) => {
 			postMessage('onSaveAnnotations', { annotations });
@@ -108,6 +110,15 @@ window.createView = (encodedOptions) => {
 	});
 };
 
+window.setContainerInsets = (options) => {
+	log("Set container insets: " + JSON.stringify(options));
+	const style = document.documentElement.style;
+	style.setProperty('--safe-area-inset-top', (options.top || 0) + 'px');
+	style.setProperty('--safe-area-inset-right', (options.right || 0) + 'px');
+	style.setProperty('--safe-area-inset-bottom', (options.bottom || 0) + 'px');
+	style.setProperty('--safe-area-inset-left', (options.left || 0) + 'px');
+};
+
 window.setTool = (options) => {
 	log("Set tool: " + options.type + "; color: " + options.color);
 	window._view.setTool(options);
@@ -152,6 +163,41 @@ window.navigate = (options) => {
 	window._view.navigate(decodedLocation);
 };
 
+window.setSDTPack = (options) => {
+	log("Set SDT pack: v" + options.packVersion + " schema " + options.schemaMajorVersion);
+	window._view.setSDTPack({
+		bytes: base64ToBytes(options.bytes),
+		packVersion: options.packVersion,
+		schemaMajorVersion: options.schemaMajorVersion,
+	});
+};
+
+window.sdtAnchorToPosition = async (options) => {
+	const anchor = JSON.parse(decodeBase64(options.anchor));
+	const position = await window._view.sdtAnchorToPosition(anchor);
+	postMessage('onSDTPosition', { requestID: options.requestID, position });
+};
+
+window.createAnnotationFromSDT = async (options) => {
+	const params = JSON.parse(decodeBase64(options.params));
+	log("Create annotation from SDT: " + params.type);
+	const annotation = await window._view.createAnnotationFromSDT(params);
+	postMessage('onCreateAnnotationFromSDT', { requestID: options.requestID, annotation });
+};
+
+window.getReadAloudSegments = async (options) => {
+	log("Get Read Aloud segments: " + options.granularity);
+	const segments = await window._view.getReadAloudSegments(options.granularity);
+	postMessage('onReadAloudSegments', { requestID: options.requestID, segments });
+};
+
+window.setReadAloudAnnotation = async (options) => {
+	const params = JSON.parse(decodeBase64(options.params));
+	log("Set Read Aloud annotation: " + params.type);
+	const annotation = await window._view.setReadAloudAnnotation(params);
+	postMessage('onReadAloudAnnotation', { requestID: options.requestID, annotation });
+};
+
 window.setPageLabels = (options) => {
 	const pageLabels = JSON.parse(decodeBase64(options.pageLabels));
 	log("Set page labels: " + JSON.stringify(pageLabels));
@@ -168,6 +214,3 @@ window.enterPassword = (options) => {
 	log("Enter password");
 	window._view.enterPassword(password);
 };
-
-// Notify when iframe is loaded
-postMessage('onInitialized');

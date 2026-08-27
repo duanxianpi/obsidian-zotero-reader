@@ -78,7 +78,7 @@
 	width: 310px;
 	padding: 12px;
 	gap: 12px;
-	inset-inline-start: 10px;
+	inset-inline-end: 10px;
 	top: $height-toolbar - 3px;
 
 	.group {
@@ -94,6 +94,17 @@
 		.option label {
 			display: flex;
 			align-items: center;
+		}
+
+		.reading-mode-control {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+
+			.progress-ring {
+				width: 16px;
+				height: 16px;
+			}
 		}
 
 		.option.themes {
@@ -554,8 +565,7 @@
 						}
 
 						&.buffering svg {
-							color: var(--fill-secondary);
-							animation: rotating 0.5s steps(12) infinite;
+							@include loading-spinner;
 						}
 					}
 
@@ -666,8 +676,7 @@
 				}
 
 				&.buffering svg {
-					color: var(--fill-secondary);
-					animation: rotating 0.5s steps(12) infinite;
+					@include loading-spinner;
 				}
 			}
 		}

@@ -4,6 +4,7 @@ import {
 	Annotation,
 	AnnotationPopupParams,
 	AnnotationType,
+	ArrayPoint,
 	ArrayRect,
 	ColorScheme,
 	FindState,
@@ -14,9 +15,6 @@ import {
 	OverlayPopupParams,
 	Platform,
 	Position,
-	ReadAloudGranularity,
-	ReadAloudSegment,
-	RangeRef,
 	SelectionPopupParams,
 	Theme,
 	Tool,
@@ -33,6 +31,7 @@ import React from "react";
 import { isSelector, Selector } from "./lib/selector";
 import {
 	caretPositionFromPoint,
+	collapseToOneCharacter,
 	getBoundingPageRect,
 	getColumnSeparatedPageRects,
 	makeRangeSpanning,
@@ -65,15 +64,19 @@ import { debounce } from "../../common/lib/debounce";
 import {
 	expandRect,
 	getBoundingRect,
+	isErrorRect,
 	isPageRectVisible,
 	pageRectToClientRect,
-	rectContainsPoint
+	rectContainsPoint,
+	rectsIntersect
 } from "./lib/rect";
 import { History } from "../../common/lib/history";
 import { closestMathTeX } from "./lib/math";
 import { DEFAULT_REFLOWABLE_APPEARANCE, PageWidth, type ReflowableAppearance } from "./lib/appearance";
 import { ReadAloud } from "./lib/read-aloud";
 import { ObsidianBridge } from "../../obsidian-adapter";
+
+const PEN_ACTIVE_TIMEOUT = 5 * 60 * 1000;
 
 abstract class DOMView<State extends DOMViewState, Data> {
 	readonly MIN_SCALE = 0.6;
@@ -148,6 +151,12 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	protected _gotPointerUp = false;
 
+	protected _hadSelectionOnPointerDown = false;
+
+	protected _selectionChangedWhilePointerDown = false;
+
+	protected _selectionClickCaret: PersistentRange | null = null;
+
 	protected _handledPointerIDs = new Set<number>();
 
 	protected _lastScrollTime: number | null = null;
@@ -178,13 +187,17 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	protected _lastKeyboardFocusedAnnotationID: string | null = null;
 
-	protected _penConnected: boolean;
-
 	protected _penActive: boolean;
+
+	protected _penActiveTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	protected _penExclusive: boolean;
 
 	private _resizeObserver: ResizeObserver;
+
+	private _lastResizeObserverWidth: number | null = null;
+
+	private _lastResizeObserverHeight: number | null = null;
 
 	protected _a11yVirtualCursorTarget: Node | null;
 
@@ -208,7 +221,6 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._selectionPopup = options.selectionPopup;
 		this._overlayPopup = options.overlayPopup;
 		this._findState = options.findState;
-		this._penConnected = options.penConnected ?? false;
 		this._penActive = options.penActive ?? false;
 		this._penExclusive = options.penExclusive ?? false;
 		this._overlayPopupDelayer = new PopupDelayer({ open: !!this._overlayPopup });
@@ -241,6 +253,22 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this.initializedPromise.then(() => this.initialized = true);
 		this._resizeIframeImmediate();
 		this._resizeObserver = new ResizeObserver(() => {
+			let dpr = window.devicePixelRatio || 1;
+			let width = Math.floor(this._container.clientWidth * dpr) / dpr;
+			let height = Math.floor(this._container.clientHeight * dpr) / dpr;
+			if (width === this._lastResizeObserverWidth && height === this._lastResizeObserverHeight) {
+				return;
+			}
+			let heightChanged = this._lastResizeObserverHeight !== null
+				&& height !== this._lastResizeObserverHeight;
+			this._lastResizeObserverWidth = width;
+			this._lastResizeObserverHeight = height;
+			// A width-only resize that the view can absorb purely by adjusting its horizontal margins
+			// (e.g. a reflowable EPUB that isn't filling the available width) doesn't move the content,
+			// so skip the resize masking and position save/restoration and just apply the new size instantly.
+			if (!heightChanged && this._tryResizeWidthInPlace(width)) {
+				return;
+			}
 			this._resizeIframeLeading();
 			this._resizeIframeTrailing();
 		});
@@ -375,6 +403,9 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			.addEventListener('change', () => this._updateColorScheme());
 
 		await this._handleViewCreated(this._options.viewState || {});
+		if (this._options.readAloudState) {
+			this.setReadAloudState(this._options.readAloudState);
+		}
 		setTimeout(() => {
 			this._handleViewUpdate();
 		});
@@ -397,9 +428,32 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	abstract toSelector(range: Range): Selector | null;
 
-	abstract toDisplayedRange(selector: Selector): Range | null;
+	abstract toDisplayedRange(position: Position): Range | null;
+
+	getSelectionPosition(): Position | null {
+		let sel = this._iframeWindow.getSelection();
+		if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+		return this.toSelector(sel.getRangeAt(0));
+	}
+
+	clearSelection() {
+		this._iframeWindow.getSelection()?.removeAllRanges();
+	}
+
+	protected _getAnnotationDisplayedRange(annotation: Partial<WADMAnnotation> & Pick<WADMAnnotation, 'type' | 'position'>): Range | null {
+		return this.toDisplayedRange(annotation.position);
+	}
 
 	abstract navigateToSelector(selector: Selector, options?: NavigateOptions): void;
+
+	isPositionNearView(position: Position): boolean {
+		let range = this.toDisplayedRange(position);
+		// Don't discard a position we can't resolve
+		if (!range) return true;
+		let rect = range.getBoundingClientRect();
+		let viewportHeight = this._iframeWindow.innerHeight;
+		return rect.bottom > -viewportHeight * 3 && rect.top < viewportHeight * 4;
+	}
 
 	// ***
 	// Abstractions over document structure
@@ -451,6 +505,29 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			rect.width,
 			rect.height
 		));
+	}
+
+	/**
+	 * Get a one-character range at the caret position nearest to a point in the
+	 * iframe, for use as a popup anchor. Returns null if the point isn't over
+	 * text.
+	 */
+	protected _getCaretRangeAtPoint(clientX: number, clientY: number): PersistentRange | null {
+		if (!supportsCaretPositionFromPoint()) {
+			return null;
+		}
+		let caretPosition = caretPositionFromPoint(this._iframeDocument, clientX, clientY);
+		if (!caretPosition) {
+			return null;
+		}
+		let range = this._iframeDocument.createRange();
+		range.setStart(caretPosition.offsetNode, caretPosition.offset);
+		range.collapse(true);
+		collapseToOneCharacter(range);
+		if (range.collapsed) {
+			return null;
+		}
+		return new PersistentRange(range);
 	}
 
 	protected _getBoundingPageRectCached(range: Range): DOMRectReadOnly {
@@ -510,7 +587,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._updateViewStats();
 
 		if (this._tool.type == 'pointer') {
-			if (this._gotPointerUp) {
+			if (this._gotPointerUp || this._options.mobile) {
 				let selection = this._iframeWindow.getSelection();
 				if (selection && !selection.isCollapsed) {
 					this._openSelectionPopup(selection);
@@ -528,7 +605,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				this._renderAnnotations();
 
 				if (annotation?.text) {
-					this._options.onAddAnnotation(annotation);
+					this._options.onAddAnnotation(this._finalizeAnnotation(annotation));
 					return true;
 				}
 			}
@@ -682,7 +759,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				return this._displayedAnnotationCache.get(annotation)!;
 			}
 
-			let range = this.toDisplayedRange(annotation.position);
+			let range = this._getAnnotationDisplayedRange(annotation);
 			if (!range) return null;
 			let displayedAnnotation = {
 				id: annotation.id,
@@ -717,7 +794,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			}
 		}
 		if (this._previewAnnotation) {
-			let range = this.toDisplayedRange(this._previewAnnotation.position);
+			let range = this._getAnnotationDisplayedRange(this._previewAnnotation);
 			if (range) {
 				displayedAnnotations.push({
 					sourceID: this._draggingNoteAnnotation?.id,
@@ -773,30 +850,88 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				this._iframeDocument,
 			)
 		);
-		// Split the selection into its column-separated parts and get the
-		// bounding rect encompassing the visible ones. This gives us a more
-		// accurate anchor for the popup.
-		let columnSeparatedPageRects = getColumnSeparatedPageRects(range);
-		// If no column rects were visible, just use the bounding rect. This
-		// essentially serves as a placeholder until the selection comes back
-		// into view.
-		if (!columnSeparatedPageRects.length) {
-			columnSeparatedPageRects = [getBoundingPageRect(range)];
-		}
-		let domRect = this._clientRectToViewportRect(
-			pageRectToClientRect(
-				getBoundingRect(columnSeparatedPageRects),
-				this._iframeWindow
-			)
-		);
 		let annotation = this.getAnnotationFromRange(range, 'highlight');
-		if (annotation) {
-			let rect: ArrayRect = [domRect.left, domRect.top, domRect.right, domRect.bottom];
-			this._options.onSetSelectionPopup({ rect, annotation });
-		}
-		else {
+		if (!annotation) {
 			this._options.onSetSelectionPopup(null);
+			return;
 		}
+		let selectionIsForward = selection.direction !== 'backward';
+
+		// Point the popup at the place where the user finished making the
+		// selection: the position that was clicked if the selection was made by
+		// clicking (double-click, triple-click, Shift-click), otherwise the end
+		// of the selection when it's forward and the beginning when it's
+		// backward. Collapse a copy of the range to that caret to get a precise
+		// anchor rather than the whole first/last line.
+		let anchorRange: Range | null = null;
+		if (this._selectionClickCaret) {
+			let clickCaretRange = this._selectionClickCaret.toRange();
+			// Only use the clicked position if it's within the selection --
+			// it might not be if the DOM has changed since the click
+			if (range.isPointInRange(clickCaretRange.startContainer, clickCaretRange.startOffset)) {
+				anchorRange = clickCaretRange;
+			}
+		}
+		if (!anchorRange) {
+			anchorRange = range.cloneRange();
+			collapseToOneCharacter(anchorRange, selectionIsForward);
+		}
+		let anchorPageRect = getBoundingPageRect(anchorRange);
+		let anchorIsVisible = !isErrorRect(anchorPageRect)
+			&& isPageRectVisible(anchorPageRect, this._iframeWindow, 0);
+
+		// Position the popup relative to the part of the selection within the
+		// anchor's column, so that it can be placed adjacent to the entire
+		// selection without being positioned relative to offscreen content in
+		// another column.
+		let columnPageRects = getColumnSeparatedPageRects(range);
+		let selectionPageRect = anchorIsVisible
+			? columnPageRects.find(rect => rectsIntersect(rect, anchorPageRect))
+			: undefined;
+		if (!selectionPageRect) {
+			// The anchor is offscreen because the selection runs past the
+			// viewport (e.g. a long selection in a snapshot or one that
+			// continues into an offscreen column in EPUB), so we can't point
+			// the popup at it. Fall back to the visible column nearest the
+			// anchor, or, if nothing is visible, to the bounding rect as a
+			// placeholder until the selection scrolls into view.
+			anchorIsVisible = false;
+			selectionPageRect = (selectionIsForward
+				? columnPageRects[columnPageRects.length - 1]
+				: columnPageRects[0]) ?? getBoundingPageRect(range);
+		}
+
+		let selectionDOMRect = this._clientRectToViewportRect(
+			pageRectToClientRect(selectionPageRect, this._iframeWindow)
+		);
+		let anchorPoint: ArrayPoint | undefined;
+		if (anchorIsVisible) {
+			let anchorDOMRect = this._clientRectToViewportRect(
+				pageRectToClientRect(anchorPageRect, this._iframeWindow)
+			);
+			anchorPoint = [
+				anchorDOMRect.left + anchorDOMRect.width / 2,
+				anchorDOMRect.top + anchorDOMRect.height / 2,
+			];
+		}
+		// Place the popup outward from the anchor: above the selection for a
+		// backward selection (anchor at the top), below it for a forward one
+		// (anchor at the bottom). If the selection is too tall to fit the popup
+		// above or below, fall back to the side nearest the anchor, flipping
+		// left/right for RTL text.
+		let rtl = isRTL(range.commonAncestorContainer);
+		this._options.onSetSelectionPopup({
+			rect: [
+				selectionDOMRect.left,
+				selectionDOMRect.top,
+				selectionDOMRect.right,
+				selectionDOMRect.bottom,
+			],
+			anchorPoint,
+			annotation,
+			preferLeft: selectionIsForward ? rtl : !rtl,
+			preferTop: !selectionIsForward,
+		});
 	}
 
 	protected _openAnnotationPopup(annotation?: WADMAnnotation) {
@@ -954,15 +1089,20 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		if (!this._draggingNoteAnnotation || !this._previewAnnotation) {
 			return;
 		}
+		let finalized = this._finalizeAnnotation(this._previewAnnotation);
 		let newAnnotation: WADMAnnotation = {
 			...this._draggingNoteAnnotation,
-			position: this._previewAnnotation.position,
-			pageLabel: this._previewAnnotation.pageLabel,
-			sortIndex: this._previewAnnotation.sortIndex,
-			text: this._previewAnnotation.text,
+			position: finalized.position,
+			pageLabel: finalized.pageLabel,
+			sortIndex: finalized.sortIndex,
+			text: finalized.text,
 		};
 		this._previewAnnotation = null;
 		this._options.onUpdateAnnotations([newAnnotation]);
+	}
+
+	protected _finalizeAnnotation(annotation: NewAnnotation<WADMAnnotation>): NewAnnotation<WADMAnnotation> {
+		return annotation;
 	}
 
 	protected _getNoteTargetRange(event: PointerEvent | DragEvent): Range | null {
@@ -1252,7 +1392,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				}
 			}
 			if (annotation) {
-				this._options.onAddAnnotation(annotation, true);
+				this._options.onAddAnnotation(this._finalizeAnnotation(annotation), true);
 				this.navigateToSelector(annotation.position, {
 					block: 'center',
 					behavior: 'smooth',
@@ -1412,6 +1552,16 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			return;
 		}
 
+		if (this._gotPointerUp) {
+			// The selection changed outside of a pointer interaction (with the
+			// keyboard, or programmatically), so a remembered clicked position
+			// no longer applies
+			this._selectionClickCaret = null;
+		}
+		else {
+			this._selectionChangedWhilePointerDown = true;
+		}
+
 		if (!selection || selection.isCollapsed) {
 			this._options.onSetSelectionPopup(null);
 		}
@@ -1428,6 +1578,10 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	private _handleAnnotationPointerDown = (id: string, event: React.PointerEvent) => {
 		event.stopPropagation();
+
+		// Clean up in case this pointer was left behind in _handledPointerIDs,
+		// since we know this is a new interaction
+		this._handledPointerIDs.delete(event.pointerId);
 
 		// On mobile, pointerup handles all annotation selection
 		if (this._options.mobile) {
@@ -1483,6 +1637,9 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			return;
 		}
 
+		if (event.type === 'pointercancel') {
+			return;
+		}
 		if (event.button !== 0
 				|| this._options.mobile && this._pointerMovementWhileDown > 5) {
 			return;
@@ -1574,10 +1731,17 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	}
 
 	protected _handlePointerDown(event: PointerEvent) {
+		// Clean up in case this pointer was left behind in _handledPointerIDs,
+		// since we know this is a new interaction
+		this._handledPointerIDs.delete(event.pointerId);
+
 		if ((event.buttons & 1) === 1 && event.isPrimary) {
 			this._gotPointerUp = false;
 			this._pointerMovementWhileDown = 0;
+			this._selectionChangedWhilePointerDown = false;
 			this._lastPointerPosition = { x: event.clientX, y: event.clientY };
+			let selection = this._iframeWindow.getSelection();
+			this._hadSelectionOnPointerDown = (!!selection && !selection.isCollapsed) || !!this._selectedAnnotationIDs.length;
 
 			let touchCaretPosition = this._getTouchAnnotationStartPosition(event);
 			if (touchCaretPosition) {
@@ -1599,7 +1763,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		// The note tool will be automatically deactivated in reader.js,
 		// because this is what we do in PDF reader
 		if ((event.buttons & 1) === 1 && this._tool.type == 'note' && this._previewAnnotation) {
-			this._options.onAddAnnotation(this._previewAnnotation!, true);
+			this._options.onAddAnnotation(this._finalizeAnnotation(this._previewAnnotation!), true);
 			this._previewAnnotation = null;
 			this._renderAnnotations(true);
 			this._openAnnotationPopup();
@@ -1630,6 +1794,15 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		}
 
 		this._gotPointerUp = true;
+		if (event.type !== 'pointercancel' && this._selectionChangedWhilePointerDown) {
+			// If this pointer changed the selection without dragging, it was a
+			// double-click, triple-click, or Shift-click. Remember the clicked
+			// position so that the selection popup can point at it instead of at
+			// the far end of the selection.
+			this._selectionClickCaret = this._pointerMovementWhileDown <= 5
+				? this._getCaretRangeAtPoint(event.clientX, event.clientY)
+				: null;
+		}
 		if (event.type === 'pointercancel') {
 			this._previewAnnotation = null;
 			this._renderAnnotations();
@@ -1645,11 +1818,13 @@ abstract class DOMView<State extends DOMViewState, Data> {
 			if (!wasToolUsed
 					&& this._pointerMovementWhileDown <= 5
 					&& !this._handledPointerIDs.has(event.pointerId)
+					&& !this._hadSelectionOnPointerDown
 					&& !(event.target as Element).closest('a')) {
 				this._options.onBackdropTap?.(event);
 			}
 		}
 		this._touchAnnotationStartPosition = null;
+		this._selectionChangedWhilePointerDown = false;
 		this._renderAnnotations();
 		this._iframeDocument.body.classList.remove('creating-touch-annotation');
 	}
@@ -1671,30 +1846,47 @@ abstract class DOMView<State extends DOMViewState, Data> {
 				&& this._canPointerEventDoTouchAnnotation(event)) {
 			let endPos = caretPositionFromPoint(this._iframeDocument, event.clientX, event.clientY);
 			if (endPos) {
-				let range = this._iframeDocument.createRange();
+				let range: Range | null = this._iframeDocument.createRange();
 				range.setStart(this._touchAnnotationStartPosition.offsetNode, this._touchAnnotationStartPosition.offset);
 				range.setEnd(endPos.offsetNode, endPos.offset);
 				if (range.collapsed) {
-					range.setStart(endPos.offsetNode, endPos.offset);
-					range.setEnd(this._touchAnnotationStartPosition.offsetNode, this._touchAnnotationStartPosition.offset);
+					// Range is reversed - end is before start in the tree
+					// Make sure this isn't WebKit freaking out and putting it
+					// way up at the top of the page
+					let endPosY = endPos.getClientRect()?.y ?? event.clientY;
+					if (isSafari && endPos.offset === 0 && event.clientY - endPosY > 50) {
+						range = null;
+					}
+					else {
+						range.setStart(endPos.offsetNode, endPos.offset);
+						range.setEnd(this._touchAnnotationStartPosition.offsetNode, this._touchAnnotationStartPosition.offset);
+					}
 				}
-				let annotation = this.getAnnotationFromRange(range, this._tool.type, this._tool.color);
+				let annotation = range && this.getAnnotationFromRange(range, this._tool.type, this._tool.color);
 				if (annotation) {
 					this._previewAnnotation = annotation;
 					this._renderAnnotations();
 				}
 			}
-			this._penActive ||= event.pointerType === 'pen';
+			if (event.pointerType === 'pen') {
+				this._markPenActive();
+			}
 			event.stopPropagation();
 		}
+	}
+
+	/**
+	 * Find the containing block for Read Aloud jump button positioning.
+	 */
+	getReadAloudBlock(element: Element): Element | null {
+		return getContainingBlock(element);
 	}
 
 	protected _handlePointerMoveForReadAloud = throttle((event: MouseEvent) => {
 		if (!this._readAloud.state?.popupOpen || event.buttons !== 0) {
 			return;
 		}
-		let iconTargetRect = this._readAloudJumpButton.iconTargetRect;
-		if (iconTargetRect && rectContainsPoint(iconTargetRect, event.clientX, event.clientY)) {
+		if (this._readAloudJumpButton.iconContainsPoint(event.clientX, event.clientY)) {
 			return;
 		}
 
@@ -1708,18 +1900,14 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		let element = closestElement(target);
 		if (!element) return;
 
-		let block = getContainingBlock(element);
+		let block = this.getReadAloudBlock(element);
 		if (!block || block === this._readAloudJumpButtonBlock) {
 			return;
 		}
 
 		// Only show for blocks that are the direct containing block of a segment,
 		// not ancestor blocks (e.g. a wrapper <div> containing <p>s in snapshots)
-		let segments = this._readAloud.state!.segments;
-		if (!segments
-				|| !segments.some(s => getContainingBlock(
-					closestElement((s.position as RangeRef).range.startContainer)!
-				) === block)) {
+		if (!this._readAloud.getSegmentForBlock(block)) {
 			return;
 		}
 
@@ -1748,19 +1936,31 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	protected _handleReadAloudJumpButtonClick() {
 		if (!this._readAloudJumpButtonBlock || !this._readAloud.state) return;
 
-		let blockRange = this._iframeDocument.createRange();
-		blockRange.selectNodeContents(this._readAloudJumpButtonBlock);
+		let segment = this._readAloud.getSegmentForBlock(this._readAloudJumpButtonBlock);
+		if (!segment) return;
 
-		// Immediately move the highlight to the target block
-		let blockSelector = this.toSelector(blockRange);
-		if (blockSelector) {
-			this.setSpotlight(SpotlightKey.ReadAloudActiveSegment, blockSelector, null);
+		// Match the immediate spotlight to the user's highlight granularity,
+		// so we don't show a wrong-granularity flash before the manager overrides
+		// with a new highlight.
+		let state = this._readAloud.state;
+		let useSegmentSpotlight = state.segmentGranularity === 'sentence'
+			&& state.highlightGranularity !== 'paragraph'
+			&& isSelector(segment.sourcePosition);
+		let immediateSelector: Selector | null;
+		if (useSegmentSpotlight) {
+			immediateSelector = segment.sourcePosition as Selector;
+		}
+		else {
+			let blockRange = this._iframeDocument.createRange();
+			blockRange.selectNodeContents(this._readAloudJumpButtonBlock);
+			immediateSelector = this.toSelector(blockRange);
+		}
+		if (immediateSelector) {
+			this.setSpotlight(SpotlightKey.ReadAloudActiveSegment, immediateSelector, null);
 		}
 
-		blockRange.collapse(true);
-
 		this._options.onSetReadAloudState({
-			targetPosition: { range: new PersistentRange(blockRange) },
+			targetPosition: segment.position,
 		});
 	}
 
@@ -1772,10 +1972,36 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
 			return false;
 		}
-		if (this._penConnected && (this._penActive || this._penExclusive) && event.pointerType !== 'pen') {
+		// While a pen is in use (recently active, or exclusive mode is on), finger
+		// touches navigate/select instead of annotating.
+		if ((this._penActive || this._penExclusive) && event.pointerType !== 'pen') {
 			return false;
 		}
 		return event.target !== this._annotationShadowRoot.host;
+	}
+
+	/**
+	 * Mark the pen as recently active and (re)start the idle timeout. Because we
+	 * can't detect whether a stylus is physically connected, we treat it as in
+	 * use for PEN_ACTIVE_TIMEOUT after the last pen interaction.
+	 */
+	protected _markPenActive() {
+		this._penActive = true;
+		if (this._penActiveTimeout !== null) {
+			clearTimeout(this._penActiveTimeout);
+		}
+		this._penActiveTimeout = setTimeout(() => {
+			this._penActive = false;
+			this._penActiveTimeout = null;
+		}, PEN_ACTIVE_TIMEOUT);
+	}
+
+	protected _clearPenActive() {
+		this._penActive = false;
+		if (this._penActiveTimeout !== null) {
+			clearTimeout(this._penActiveTimeout);
+			this._penActiveTimeout = null;
+		}
 	}
 
 	protected _getTouchAnnotationStartPosition(event: PointerEvent): CaretPosition | null {
@@ -1857,11 +2083,22 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		if (this._iframeDocument) {
 			this._iframeDocument.documentElement.style.width = width + 'px';
 			this._iframeDocument.documentElement.style.height = height + 'px';
+			// Immediately reposition annotations
+			this._handleViewUpdate();
 		}
 	}
 
 	protected _resizeIframeLeading() {
 		// No-op besides EPUB
+	}
+
+	/**
+	 * Attempt to apply a width-only resize without masking the transition or saving and restoring the
+	 * reading position, for views that can absorb the change with their margins alone. Returns true if
+	 * the resize was handled, or false to fall back to the masked resize path.
+	 */
+	protected _tryResizeWidthInPlace(_width: number): boolean {
+		return false;
 	}
 
 	protected _resizeIframeTrailing() {
@@ -1886,26 +2123,6 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	lockPositionToReadAloud(): void {
 		this._readAloud.setPositionLocked(true);
-	}
-
-	getSerializableReadAloudPosition(position: Position): Selector | null {
-		if ('range' in position) {
-			return this.toSelector(position.range.toRange());
-		}
-		if (!isSelector(position)) {
-			return null;
-		}
-		return position;
-	}
-
-	isReadAloudPositionTooFar(savedPosition: Position, _viewState: Record<string, unknown>): boolean {
-		let range = this.toDisplayedRange(savedPosition as Selector);
-		if (!range) {
-			// Can't resolve the selector - not in a displayed root
-			return true;
-		}
-		let rect = getBoundingPageRect(range);
-		return !isPageRectVisible(rect, this._iframeWindow, this._iframeWindow.innerHeight * 3);
 	}
 
 	protected _handleScrollCapture(event: Event) {
@@ -2022,6 +2239,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	destroy() {
 		// ZotFlow: Stop pending searches before detaching the document they reference.
 		this._find?.cancel();
+		this._clearPenActive();
 		this._overlayPopupDelayer.destroy();
 		this._annotationRenderRoot.unmount();
 		this._resizeObserver.disconnect();
@@ -2054,7 +2272,7 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._renderAnnotations();
 
 		if (tool.type === 'pointer') {
-			this._penActive = false;
+			this._clearPenActive();
 		}
 	}
 
@@ -2156,12 +2374,13 @@ abstract class DOMView<State extends DOMViewState, Data> {
 		this._renderAnnotations(true);
 	}
 
-	setPenConnected(penConnected: boolean) {
-		this._penConnected = penConnected;
-	}
-
 	setPenActive(penActive: boolean) {
-		this._penActive = penActive;
+		if (penActive) {
+			this._markPenActive();
+		}
+		else {
+			this._clearPenActive();
+		}
 	}
 
 	setPenExclusive(penExclusive: boolean) {
@@ -2180,27 +2399,6 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	get hasReadAloudTarget(): boolean {
 		return this._readAloud.hasTarget;
-	}
-
-	addAnnotationFromReadAloudSegments(segments: ReadAloudSegment[], init: NewAnnotation<WADMAnnotation>): Annotation | null {
-		let annotation = this._readAloud.getAnnotationFromSegments(segments, init);
-		if (annotation) {
-			return this._options.onAddAnnotation(annotation);
-		}
-		return null;
-	}
-
-	computeReadAloudRepositionIndex(position: Position, segments: ReadAloudSegment[]): number | null {
-		return this._readAloud.computeRepositionIndex(position, segments);
-	}
-
-	getReadAloudRanges(granularity: ReadAloudGranularity): Range[] {
-		let rootRanges = this._getRoots(true).map((root) => {
-			let range = this._iframeDocument.createRange();
-			range.selectNodeContents(root);
-			return range;
-		});
-		return rootRanges.flatMap(rootRange => this._readAloud.getRanges(rootRange, granularity));
 	}
 
 	// ***
@@ -2329,9 +2527,9 @@ export type DOMViewOptions<State extends DOMViewState, Data> = {
 	viewState?: State;
 	fontFamily?: string;
 	hyphenate?: boolean;
-	penConnected?: boolean;
 	penActive?: boolean;
 	penExclusive?: boolean;
+	readAloudState: ReadAloudStateSnapshot;
 	readAloudVoices: Map<string, string>,
 	onSetOutline: (outline: OutlineItem[]) => void;
 	onChangeViewState: (state: State, primary?: boolean) => void;
@@ -2360,7 +2558,6 @@ export type DOMViewOptions<State extends DOMViewState, Data> = {
 	onKeyDown: (event: KeyboardEvent) => void;
 	onEPUBEncrypted: () => void;
 	onFocusAnnotation: (annotation: WADMAnnotation) => void;
-	onSetHiddenAnnotations: (ids: string[]) => void;
 	onBackdropTap?: (event: PointerEvent) => void;
 	getLocalizedString?: (name: string) => string;
 	data: Data & {

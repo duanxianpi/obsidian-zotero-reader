@@ -9,6 +9,9 @@ window.createView = (options) => {
 	let view = new View({
 		...options,
 		container: document.getElementById('view'),
+		onInitialized: () => {
+			console.log('Initialized view');
+		},
 		onSaveAnnotations: (annotations) => {
 			// New annotation was created or existing was modified. Although, view, probably, won't need
 			// to modify existing annotations for now
@@ -93,6 +96,7 @@ async function main() {
 	let queryString = window.location.search;
 	let urlParams = new URLSearchParams(queryString);
 	let type = urlParams.get('type') || 'snapshot';
+	let platform = urlParams.get('platform') || (/Android/.test(navigator.userAgent) ? 'android' : undefined);
 	let demo;
 	if (type === 'pdf') {
 		demo = pdf;
@@ -106,6 +110,7 @@ async function main() {
 	let res = await fetch(demo.fileName);
 	window.createView({
 		type,
+		platform,
 		data: {
 			buf: new Uint8Array(await res.arrayBuffer()),
 		},
