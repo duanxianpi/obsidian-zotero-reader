@@ -8,11 +8,14 @@ const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const ZoteroLocalePlugin = require("./webpack.zotero-locale-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 const InlineHtmlAssetsPlugin = require("./webpack.inline-html-assets-plugin");
-const PdfWorkerPlugin = require("./webpack.pdf-worker-plugin");
+const DocumentWorkerPlugin = require("./webpack.document-worker-plugin");
 
 const ZOTERO_LOCALE_COMMIT = fs
 	.readFileSync(path.resolve(__dirname, ".zotero-locale-commit"), "utf8")
 	.trim();
+
+// Document Worker pinned by Zotero 10.0.0.
+const DOCUMENT_WORKER_COMMIT = "6d0c0ce45d96a4ed5b697927306b1e9207a02041";
 
 module.exports = (_env, argv) => {
 	const mode = argv.mode || "development";
@@ -148,7 +151,15 @@ module.exports = (_env, argv) => {
 				commitHash: ZOTERO_LOCALE_COMMIT,
 			}),
 			new CleanWebpackPlugin({
-				cleanOnceBeforeBuildPatterns: ["**/*", "!pdf/**"],
+				cleanOnceBeforeBuildPatterns: [
+					"**/*",
+					"!pdf",
+					"!pdf/LICENSE",
+					"!pdf/build",
+					"!pdf/build/**",
+					"!pdf/web",
+					"!pdf/web/**",
+				],
 			}),
 			new HtmlWebpackPlugin({
 				template: "./index.obsidian.reader.html",
@@ -163,8 +174,8 @@ module.exports = (_env, argv) => {
 				keepLinkTag: false,
 				keepScriptTag: false,
 			}),
-			new PdfWorkerPlugin({
-				commitHash: "fd642b38287f1e59aaf8e02c3132da6d3daa39c1",
+			new DocumentWorkerPlugin({
+				commitHash: DOCUMENT_WORKER_COMMIT,
 			}),
 		],
 	};
