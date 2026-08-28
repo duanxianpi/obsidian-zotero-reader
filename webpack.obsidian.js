@@ -14,8 +14,12 @@ const ZOTERO_LOCALE_COMMIT = fs
 	.readFileSync(path.resolve(__dirname, ".zotero-locale-commit"), "utf8")
 	.trim();
 
-// Document Worker pinned by Zotero 10.0.0.
-const DOCUMENT_WORKER_COMMIT = "6d0c0ce45d96a4ed5b697927306b1e9207a02041";
+const DOCUMENT_WORKER_LOCK = JSON.parse(
+	fs.readFileSync(
+		path.resolve(__dirname, "../../document-worker.lock.json"),
+		"utf8"
+	)
+).documentWorker;
 
 module.exports = (_env, argv) => {
 	const mode = argv.mode || "development";
@@ -175,7 +179,8 @@ module.exports = (_env, argv) => {
 				keepScriptTag: false,
 			}),
 			new DocumentWorkerPlugin({
-				commitHash: DOCUMENT_WORKER_COMMIT,
+				commitHash: DOCUMENT_WORKER_LOCK.commit,
+				archiveSha256: DOCUMENT_WORKER_LOCK.archiveSha256,
 			}),
 		],
 	};

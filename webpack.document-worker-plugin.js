@@ -1,4 +1,5 @@
 const https = require("https");
+const crypto = require("crypto");
 const JSZip = require("jszip");
 const Terser = require("terser");
 const { Compilation, sources } = require("webpack");
@@ -18,6 +19,7 @@ const CORE_RESOURCE_PATTERNS = [
 class DocumentWorkerPlugin {
 	constructor(options) {
 		this.commitHash = options.commitHash;
+		this.archiveSha256 = options.archiveSha256;
 		this.cachedAssets = null;
 	}
 
@@ -56,6 +58,15 @@ class DocumentWorkerPlugin {
 	async getWorkerAssets() {
 		const url = `https://zotero-download.s3.amazonaws.com/ci/document-worker/${this.commitHash}.zip`;
 		const zipBuffer = await this.download(url);
+		const actualSha256 = crypto
+			.createHash("sha256")
+			.update(zipBuffer)
+			.digest("hex");
+		if (actualSha256 !== this.archiveSha256) {
+			throw new Error(
+				`Archive SHA-256 mismatch: expected ${this.archiveSha256}, got ${actualSha256}`
+			);
+		}
 		return this.extract(zipBuffer);
 	}
 
