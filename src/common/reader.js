@@ -1052,10 +1052,11 @@ class Reader {
 			await this._setReadingMode(this._lastViewPrimary || !this._secondaryView, enabled);
 		}
 		catch (e) {
+			if (this._destroyPromise) return; // ZotFlow
 			console.error(e);
 			this.setErrorMessage(this._getString('reader-reading-mode-not-supported'));
 			setTimeout(() => {
-				this.setErrorMessage(null);
+				if (!this._destroyPromise) this.setErrorMessage(null); // ZotFlow
 			}, 5000);
 		}
 	}
@@ -1065,6 +1066,7 @@ class Reader {
 	// and create two overlay views)
 	_setReadingMode(primary, enabled) {
 		let apply = async () => {
+			if (this._destroyPromise) return; // ZotFlow
 			let sdtViewKey = primary ? '_primarySDTView' : '_secondarySDTView';
 			let enabledStateKey = primary ? 'primaryReadingModeEnabled' : 'secondaryReadingModeEnabled';
 			let baseView = primary ? this._primaryView : this._secondaryView;
@@ -1076,8 +1078,10 @@ class Reader {
 					sdt = await this._loadSDT();
 				}
 				finally {
-					this._updateState({ readingModeLoading: false });
+					// ZotFlow: closing the iframe does not cancel this awaited SDT request.
+					if (!this._destroyPromise) this._updateState({ readingModeLoading: false });
 				}
+				if (this._destroyPromise) return; // ZotFlow
 				if (!sdt) {
 					throw new Error('SDT unavailable');
 				}
@@ -1324,7 +1328,8 @@ class Reader {
 					});
 				}
 				finally {
-					if (reportedProgress) {
+					// ZotFlow: finally still runs when the host discards a result after close.
+					if (reportedProgress && !this._destroyPromise) {
 						this._updateState({ sdtProgress: null });
 					}
 				}
@@ -1373,9 +1378,13 @@ class Reader {
 			this._sdtPromise = (async () => {
 				let reader = await this.getSDTReader();
 				if (!reader) {
+					// ZotFlow: Missing Pack / failed generation must remain retryable after
+					// installation, without closing and reopening the document.
+					this._sdtPromise = null;
 					return null;
 				}
 				let structure = await reader.materialize();
+				if (this._destroyPromise) return null; // ZotFlow
 				this._sdt = {
 					structure,
 					mapper: createPositionMapper(structure),

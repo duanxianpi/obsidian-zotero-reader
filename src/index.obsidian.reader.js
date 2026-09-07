@@ -37,6 +37,11 @@ export default class ZoteroReaderAdapter {
 			sidebarOpen: false,
 			toolbarPlaceholderWidth: 0,
 			showAnnotations: true,
+			// ZotFlow's host bridge already suppresses progress after close/reconnect.
+			getSDTPack: ({ onProgress } = {}) => ObsidianBridge.getSDTPack({
+				onProgress,
+				password: this.reader?._password ?? opts.password,
+			}),
 			onOpenContextMenu: (params) => {
 				this.reader.openContextMenu(params);
 			},
@@ -416,7 +421,15 @@ export default class ZoteroReaderAdapter {
 		this.disposePromise = (async () => {
 			const reader = this.reader;
 			try {
-				await reader?.destroy?.();
+				// Obsidian owns the iframe lifecycle. Release its SDT overlays here
+				// before the existing Reader cleanup clears the references to them.
+				try {
+					reader?._secondarySDTView?.destroy();
+					reader?._primarySDTView?.destroy();
+				}
+				finally {
+					await reader?.destroy?.();
+				}
 			}
 			finally {
 				if (window._reader === reader) {
