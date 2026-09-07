@@ -330,9 +330,10 @@ class Reader {
 			this._state.secondaryViewState = state;
 		}
 
-		// Start pulling (and generating, if needed) the SDT pack right away,
-		// so it's ready by the time a feature awaits getSDTReader()
-		this.getSDTReader();
+		// ZotFlow: Disable startup SDT prefetch. Merely opening a document must
+		// not load Enhancement Pack resources, generate SDT, or prompt installation.
+		// Reading Mode and other SDT features request it on demand instead.
+		// this.getSDTReader();
 
 		this._focusManager = new FocusManager({
 			reader: this,
