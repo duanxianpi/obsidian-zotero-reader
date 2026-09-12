@@ -479,7 +479,12 @@ abstract class DOMView<State extends DOMViewState, Data> {
 	// ***
 
 	protected async _pushHistoryPoint(transient = false) {
-		if (!transient) {
+		if (transient) {
+			if (this._suspendHistorySaving) {
+				return;
+			}
+		}
+		else {
 			this._suspendHistorySaving = true;
 			await debounceUntilScrollFinishes(this._iframeDocument, 100);
 			this._suspendHistorySaving = false;
@@ -2111,6 +2116,9 @@ abstract class DOMView<State extends DOMViewState, Data> {
 
 	protected _handleScroll(event: Event) {
 		this._lastScrollTime = event.timeStamp;
+		if (this._readAloud.state?.active && !this._readAloud.scrolling) {
+			this._onManualNavigation();
+		}
 		requestAnimationFrame(() => {
 			this._renderAnnotations();
 			this._repositionPopups();
