@@ -6,6 +6,7 @@ import {
 	registerChildAPI,
 } from "./obsidian-adapter.js";
 import { connect, WindowMessenger } from "penpal";
+import { initializeEditorMathJax } from "./obsidian-mathjax.js";
 
 /**
  * -----------------------------------------------------------
@@ -14,6 +15,8 @@ import { connect, WindowMessenger } from "penpal";
  */
 
 (async () => {
+	await initializeEditorMathJax(window, window.findParentWindow());
+
 	const messenger = new WindowMessenger({
 		remoteWindow: window.findParentWindow(),
 		allowedOrigins: ["*"],

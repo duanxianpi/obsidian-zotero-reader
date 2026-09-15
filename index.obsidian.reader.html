@@ -37,24 +37,11 @@
 				.querySelector("base")
 				.setAttribute("href", parent.location.origin + "/");
 
-			// Set up MathJax
-			window.MathJax = {
-				chtml: {
-					adaptiveCSS: false,
-					fontURL: parent.MathJax.config.chtml.fontURL,
-				},
-				loader: {
-					paths: parent.MathJax.config.loader.paths,
-				},
-				startup: {
-					typeset: true,
-				},
-			};
 		})();
 	</script>
 
-	<!-- Loading MathJax -->
-	<script src="/lib/mathjax/tex-chtml-full.js"></script>
+	<!-- Editor MathJax is initialized by index.obsidian.js after the reader's
+	     bundled MathJax modules have loaded. Do not create a MathJax global here. -->
 
 	<!-- Loading Enhance.js -->
 	<script src="/enhance.js" type="text/javascript"></script>
