@@ -3,12 +3,64 @@
 // Initialize this only AFTER the reader's imports have run: MathJax 3's
 // AllPackages module otherwise calls preLoad on the editor's MathJax 4 loader.
 
-function copyConfig(value) {
-	if (Array.isArray(value)) return value.map(copyConfig);
-	if (Object.prototype.toString.call(value) === "[object Object]") {
-		return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copyConfig(item)]));
+function copyStringMap(value) {
+	if (!value || typeof value !== "object") return {};
+	return Object.fromEntries(
+		Object.entries(value).filter(([, item]) => typeof item === "string")
+	);
+}
+
+function copyTypedFields(value, fields) {
+	if (!value || typeof value !== "object") return {};
+	return Object.fromEntries(
+		fields
+			.filter(([key, type]) => typeof value[key] === type)
+			.map(([key]) => [key, value[key]])
+	);
+}
+
+function getMajorVersion(mathJax) {
+	const match = /^(\d+)(?:\.|$)/.exec(mathJax?.version || "");
+	return match ? Number(match[1]) : null;
+}
+
+function createMathJaxConfig(mathJax) {
+	const majorVersion = getMajorVersion(mathJax);
+	if (majorVersion !== 3 && majorVersion !== 4) {
+		throw new Error(`Unsupported editor MathJax version: ${mathJax?.version || "unknown"}`);
 	}
-	return value;
+
+	// MathJax mutates its config during startup. In v3, for example,
+	// chtml.font becomes a TeXFont instance whose prototype cannot cross into
+	// the iframe. Copy only the primitive fields the new runtime needs.
+	const hostConfig = mathJax.config || {};
+	const iframeConfig = {
+		loader: { paths: copyStringMap(hostConfig.loader?.paths) },
+		chtml: {
+			...copyTypedFields(hostConfig.chtml, [
+				["fontURL", "string"],
+				["matchFontHeight", "boolean"],
+			]),
+			adaptiveCSS: false,
+		},
+		options: { enableMenu: false },
+		// Do not run host startup callbacks against the iframe or scan the
+		// reader content. Obsidian handles the editor's actual typesetting.
+		startup: { typeset: false },
+	};
+
+	if (majorVersion === 4) {
+		iframeConfig.output = copyTypedFields(hostConfig.output, [
+			["font", "string"],
+			["fontPath", "string"],
+		]);
+		Object.assign(
+			iframeConfig.chtml,
+			copyTypedFields(hostConfig.chtml, [["dynamicPrefix", "string"]])
+		);
+	}
+
+	return iframeConfig;
 }
 
 function waitForScript(script) {
@@ -47,17 +99,7 @@ export async function initializeEditorMathJax(readerWindow, parentWindow) {
 		// when this iframe starts; don't mistake its configuration for the engine.
 		if (!parentWindow.MathJax?.startup?.promise) await waitForScript(hostScript);
 		await parentWindow.MathJax.startup.promise;
-		const config = parentWindow.MathJax.config;
-		readerWindow.MathJax = {
-			loader: { paths: copyConfig(config.loader?.paths || {}) },
-			tex: copyConfig(config.tex || {}),
-			output: copyConfig(config.output || {}),
-			chtml: { ...copyConfig(config.chtml || {}), adaptiveCSS: false },
-			options: copyConfig(config.options || {}),
-			// Do not run host startup callbacks against the iframe or scan the
-			// reader content. Obsidian handles the editor's actual typesetting.
-			startup: { typeset: false },
-		};
+		readerWindow.MathJax = createMathJaxConfig(parentWindow.MathJax);
 		script = readerWindow.document.createElement("script");
 		script.src = hostScript.src;
 		const loaded = waitForScript(script);

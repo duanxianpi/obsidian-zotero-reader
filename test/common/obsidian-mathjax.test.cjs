@@ -4,6 +4,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 const babel = require('@babel/core');
+const { CHTML } = require('mathjax-full/js/output/chtml.js');
+const { TeXFont } = require('mathjax-full/js/output/chtml/fonts/tex.js');
 
 const root = path.resolve(__dirname, '../..');
 const template = fs.readFileSync(path.join(root, 'index.obsidian.reader.html'), 'utf8');
@@ -28,21 +30,27 @@ function scriptElement(src) {
 	};
 }
 
-function harness(filename = 'obsidian-mathjax.js') {
+function createHostConfig(version) {
 	const callback = () => {};
 	const config = {
 		loader: { paths: { mathjax: 'app://obsidian.md/lib/mathjax', fonts: '/local-fonts' } },
-		output: { font: 'mathjax-tex' },
 		chtml: { fontURL: '/local-fonts/woff2', adaptiveCSS: true },
 		tex: { macros: { RR: '\\mathbb{R}' }, packages: ['base', 'ams'], postFilters: [callback] },
 		options: { enableMenu: false },
 		startup: { ready: callback },
 	};
+	if (version.startsWith('4.')) {
+		config.output = { font: 'mathjax-tex' };
+	}
+	return config;
+}
+
+function harness({ filename = 'obsidian-mathjax.js', version = '4.0.0', config = createHostConfig(version) } = {}) {
 	const hostScript = scriptElement(`app://obsidian.md/lib/mathjax/${filename}`);
 	const parent = {
 		location: { origin: 'app://obsidian.md' },
 		document: { scripts: [hostScript] },
-		MathJax: { config, startup: { promise: Promise.resolve() } },
+		MathJax: { version, config, startup: { promise: Promise.resolve() } },
 	};
 	const added = [];
 	const warnings = [];
@@ -63,56 +71,102 @@ function harness(filename = 'obsidian-mathjax.js') {
 	vm.runInContext(environment, context);
 	vm.runInContext(allPackages, context);
 	vm.runInContext(compiled, context);
-	return { context, parent, config, hostScript, added, warnings, timers };
+	return { context, parent, version, config, hostScript, added, warnings, timers };
 }
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-for (const filename of ['tex-chtml-full.js', 'obsidian-mathjax.js']) {
-	test(`uses host ${filename} and waits for editor fonts without changing host config`, async () => {
-		const h = harness(filename);
-		assert.equal(h.context.MathJax, undefined, 'HTML must not expose a partial global before bundled imports');
-		const initialized = h.context.exports.initializeEditorMathJax(h.context, h.parent);
-		await tick();
-		const script = h.added[0];
-		assert.equal(script.src, h.hostScript.src);
-		const copied = h.context.MathJax;
-		assert.equal(copied.chtml.adaptiveCSS, false);
-		assert.equal(copied.chtml.fontURL, h.config.chtml.fontURL);
-		assert.equal(copied.output.font, h.config.output.font);
-		assert.equal(copied.startup.typeset, false);
-		assert.equal(copied.startup.ready, undefined, 'host lifecycle callbacks must not run in the iframe');
-		assert.equal(copied.tex.postFilters[0], h.config.tex.postFilters[0]);
-		copied.tex.macros.RR = 'changed';
-		copied.tex.packages.push('new-package');
-		copied.loader.paths.fonts = 'changed';
-		assert.equal(h.config.tex.macros.RR, '\\mathbb{R}');
-		assert.deepEqual(h.config.tex.packages, ['base', 'ams']);
-		assert.equal(h.config.loader.paths.fonts, '/local-fonts');
-		let ready;
-		const stylesheet = { name: 'CHTML stylesheet' };
-		h.context.MathJax = {
-			startup: { promise: new Promise(resolve => { ready = resolve; }) },
-			chtmlStylesheet: () => stylesheet,
-		};
-		script.emit('load');
-		await tick();
-		assert.equal(h.added.length, 1, 'stylesheet must wait for MathJax startup');
-		ready();
-		await initialized;
-		assert.equal(h.added[1], stylesheet);
-		assert.equal(h.timers.size, 0);
-		assert.equal(script.listeners.size, 0);
-		assert.equal(h.warnings.length, 0);
-	});
+async function finishScriptLoad(h, initialized) {
+	const script = h.added[0];
+	let ready;
+	const stylesheet = { name: 'CHTML stylesheet' };
+	h.context.MathJax = {
+		startup: { promise: new Promise((resolve) => {
+			ready = resolve;
+		}) },
+		chtmlStylesheet: () => stylesheet,
+	};
+	script.emit('load');
+	await tick();
+	assert.equal(h.added.length, 1, 'stylesheet must wait for MathJax startup');
+	ready();
+	await initialized;
+	assert.equal(h.added[1], stylesheet);
+	assert.equal(h.timers.size, 0);
+	assert.equal(script.listeners.size, 0);
+	assert.equal(h.warnings.length, 0);
 }
+
+test('rebuilds MathJax 3 config without copying its runtime font instance', async () => {
+	const version = '3.2.2';
+	const config = createHostConfig(version);
+	const hostFont = new TeXFont({ fontURL: config.chtml.fontURL });
+	config.chtml.font = hostFont;
+	config.chtml.cssStyles = { runtime: true };
+	config.loader.paths.invalid = { runtime: true };
+	config.output = { font: 'must-not-cross-the-version-boundary' };
+	const h = harness({ filename: 'tex-chtml-full.js', version, config });
+	assert.equal(h.context.MathJax, undefined, 'HTML must not expose a partial global before bundled imports');
+	const initialized = h.context.exports.initializeEditorMathJax(h.context, h.parent);
+	await tick();
+	const copied = h.context.MathJax;
+	assert.equal(h.added[0].src, h.hostScript.src);
+	assert.equal(copied.chtml.adaptiveCSS, false);
+	assert.equal(copied.chtml.fontURL, config.chtml.fontURL);
+	assert.equal(copied.chtml.font, undefined);
+	assert.equal(copied.chtml.cssStyles, undefined);
+	assert.equal(copied.loader.paths.invalid, undefined);
+	assert.equal(copied.output, undefined);
+	assert.equal(copied.tex, undefined);
+	assert.equal(copied.startup.typeset, false);
+	let output;
+	assert.doesNotThrow(() => {
+		output = new CHTML(copied.chtml);
+	});
+	assert.equal(typeof output.font.adaptiveCSS, 'function');
+	assert.equal(config.chtml.font, hostFont, 'host runtime config must remain untouched');
+	await finishScriptLoad(h, initialized);
+});
+
+test('copies only safe MathJax 4 font and path settings', async () => {
+	const version = '4.0.0';
+	const config = createHostConfig(version);
+	config.loader.paths.invalid = { runtime: true };
+	config.output.fontPath = 'app://obsidian.md/lib/mathjax/%%FONT%%';
+	config.output.runtimeFont = { instance: true };
+	config.chtml.dynamicPrefix = 'app://obsidian.md/lib/mathjax/dynamic';
+	config.chtml.matchFontHeight = false;
+	config.chtml.font = { instance: true };
+	const h = harness({ version, config });
+	const initialized = h.context.exports.initializeEditorMathJax(h.context, h.parent);
+	await tick();
+	const copied = h.context.MathJax;
+	assert.deepEqual(
+		JSON.parse(JSON.stringify(copied.loader.paths)),
+		{ mathjax: 'app://obsidian.md/lib/mathjax', fonts: '/local-fonts' }
+	);
+	assert.deepEqual(
+		JSON.parse(JSON.stringify(copied.output)),
+		{ font: 'mathjax-tex', fontPath: 'app://obsidian.md/lib/mathjax/%%FONT%%' }
+	);
+	assert.equal(copied.chtml.fontURL, config.chtml.fontURL);
+	assert.equal(copied.chtml.dynamicPrefix, config.chtml.dynamicPrefix);
+	assert.equal(copied.chtml.matchFontHeight, false);
+	assert.equal(copied.chtml.adaptiveCSS, false);
+	assert.equal(copied.chtml.font, undefined);
+	assert.equal(copied.tex, undefined);
+	assert.deepEqual(JSON.parse(JSON.stringify(copied.options)), { enableMenu: false });
+	assert.deepEqual(JSON.parse(JSON.stringify(copied.startup)), { typeset: false });
+	assert.deepEqual(config.chtml.font, { instance: true }, 'host runtime config must remain untouched');
+	await finishScriptLoad(h, initialized);
+});
 
 test('waits for the host warm-up instead of using its unfinished configuration', async () => {
 	const h = harness();
 	h.parent.MathJax = h.config;
 	const initialized = h.context.exports.initializeEditorMathJax(h.context, h.parent);
 	assert.equal(h.added.length, 0);
-	h.parent.MathJax = { config: h.config, startup: { promise: Promise.resolve() } };
+	h.parent.MathJax = { version: h.version, config: h.config, startup: { promise: Promise.resolve() } };
 	h.hostScript.emit('load');
 	await tick();
 	h.added[0].emit('error');
@@ -120,6 +174,15 @@ test('waits for the host warm-up instead of using its unfinished configuration',
 	assert.equal(h.hostScript.listeners.size, 0);
 	assert.equal(h.context.MathJax, undefined);
 	assert.equal(h.timers.size, 0);
+});
+
+test('rejects an unknown MathJax major without delaying reader initialization', async () => {
+	const h = harness({ version: '5.0.0' });
+	await h.context.exports.initializeEditorMathJax(h.context, h.parent);
+	assert.equal(h.context.MathJax, undefined);
+	assert.equal(h.added.length, 0);
+	assert.equal(h.warnings.length, 1);
+	assert.match(h.warnings[0][1].message, /Unsupported editor MathJax version: 5\.0\.0/);
 });
 
 test('continues without installing a partial global when Obsidian has no MathJax', async () => {
