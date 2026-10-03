@@ -1,3 +1,4 @@
+import { copyProfileConfig, profileColors, tagNewAnnotation } from './annotation-profiles';
 import { createRoot } from 'react-dom/client';
 import React, { createContext } from 'react';
 import pako from 'pako';
@@ -17,7 +18,7 @@ import {
 	createViewContextMenu
 } from './context-menu';
 import { initPDFPrintService } from '../pdf/pdf-print-service';
-import { ANNOTATION_COLORS, DEBOUNCE_STATE_CHANGE, DEBOUNCE_STATS_CHANGE, DEFAULT_THEMES, SUSPEND_WHEN_HIDDEN_AFTER } from './defines';
+import { DEBOUNCE_STATE_CHANGE, DEBOUNCE_STATS_CHANGE, DEFAULT_THEMES, SUSPEND_WHEN_HIDDEN_AFTER } from './defines';
 import { FocusManager } from './focus-manager';
 import { KeyboardManager } from './keyboard-manager';
 import {
@@ -98,6 +99,8 @@ class Reader {
 			},
 		};
 
+		this._annotationProfileConfig = copyProfileConfig(options.annotationProfileConfig);
+		this._onAnnotationProfileChanged = options.onAnnotationProfileChanged;
 		this._onSaveAnnotations = options.onSaveAnnotations;
 		this._onDeleteAnnotations = options.onDeleteAnnotations;
 		this._onOpenTagsPopup = options.onOpenTagsPopup;
@@ -167,28 +170,28 @@ class Reader {
 			},
 			highlight: {
 				type: 'highlight',
-				color: ANNOTATION_COLORS[0][1],
+				color: this.getAnnotationColors()[0][1],
 			},
 			underline: {
 				type: 'underline',
-				color: ANNOTATION_COLORS[0][1],
+				color: this.getAnnotationColors()[0][1],
 			},
 			note: {
 				type: 'note',
-				color: ANNOTATION_COLORS[0][1],
+				color: this.getAnnotationColors()[0][1],
 			},
 			image: {
 				type: 'image',
-				color: ANNOTATION_COLORS[0][1],
+				color: this.getAnnotationColors()[0][1],
 			},
 			text: {
 				type: 'text',
-				color: ANNOTATION_COLORS[0][1],
+				color: this.getAnnotationColors()[0][1],
 				size: 14
 			},
 			ink: {
 				type: 'ink',
-				color: ANNOTATION_COLORS[3][1],
+				color: (this.getAnnotationColors().find(([, color]) => color === '#2ea8e5') || this.getAnnotationColors()[0])[1],
 				size: 2
 			},
 			eraser: {
@@ -226,6 +229,8 @@ class Reader {
 		});
 
 		this._state = {
+			annotationProfileConfig: this._annotationProfileConfig,
+			annotationColors: this.getAnnotationColors(),
 			splitType: null,
 			splitSize: '50%',
 			primary: true,
@@ -358,6 +363,7 @@ class Reader {
 			annotations: options.annotations,
 			tools: this._tools,
 			onSave: this._onSaveAnnotations,
+			onCreate: annotation => tagNewAnnotation(annotation, this._annotationProfileConfig),
 			onDelete: this._handleDeleteAnnotations,
 			onRender: (annotations) => {
 				this._updateState({ annotations });
@@ -409,6 +415,7 @@ class Reader {
 						onChangePageNumber={(pageNumber, options) => this._lastView.navigate({ pageNumber }, options)}
 						onChangePageIndex={(pageIndex, options) => this._lastView.navigate({ pageIndex }, options)}
 						onChangeTool={this.setTool.bind(this)}
+						onChangeAnnotationProfile={this.setAnnotationProfile.bind(this)}
 						onToggleAppearancePopup={this.toggleAppearancePopup.bind(this)}
 						enableReadAloud={this._enableReadAloud}
 						readAloudManager={this._readAloudManager}
@@ -930,6 +937,32 @@ class Reader {
 
 	get splitType() {
 		return this._state.splitType;
+	}
+
+	getAnnotationColors(includeExtra = false) {
+		return profileColors(this._annotationProfileConfig, key => this._getString(key), includeExtra);
+	}
+
+	setAnnotationProfileConfig(config) {
+		this._annotationProfileConfig = copyProfileConfig(config);
+		const colors = this.getAnnotationColors();
+		for (const tool of Object.values(this._tools)) {
+			if (tool.color && !this.getAnnotationColors(['ink', 'text'].includes(tool.type)).some(([, color]) => color === tool.color)) {
+				this._tools[tool.type] = { ...tool, color: colors[0][1] };
+			}
+		}
+		this._updateState({
+			annotationProfileConfig: this._annotationProfileConfig,
+			annotationColors: colors,
+			tool: this._tools[this._state.tool.type],
+			contextMenu: null,
+		});
+	}
+
+	setAnnotationProfile(profileId) {
+		if (!this._annotationProfileConfig?.profiles.some(profile => profile.id === profileId)) return;
+		this.setAnnotationProfileConfig({ ...this._annotationProfileConfig, activeProfileId: profileId });
+		this._onAnnotationProfileChanged?.(profileId);
 	}
 
 	setTool(params) {
@@ -1510,7 +1543,7 @@ class Reader {
 	 * Create an annotation spanning the given Read Aloud segments, in the
 	 * source document's coordinate system.
 	 */
-	_addAnnotationFromReadAloudSegments(segments, init) {
+	_addAnnotationFromReadAloudSegments(segments, init, options) {
 		if (!segments.length || !this._sdt || !this._readAloudSegments) {
 			return null;
 		}
@@ -1530,7 +1563,7 @@ class Reader {
 			text: segments.map(s => s.text).join(' '),
 			sortIndex: meta.sortIndex,
 			pageLabel: meta.pageLabel,
-		});
+		}, options);
 	}
 
 	_syncPersistedVoicesToManager() {
@@ -1745,7 +1778,7 @@ class Reader {
 				type: type || this._tools[this._state.textSelectionAnnotationMode].type,
 				color: ['highlight', 'underline'].includes(this._state.tool.type)
 					? this._state.tool.color
-					: ANNOTATION_COLORS[0][1],
+					: this.getAnnotationColors()[0][1],
 			},
 		);
 		if (annotation && segments && segmentIndex >= 0) {
@@ -1790,7 +1823,9 @@ class Reader {
 				type: annotation.type,
 				color: annotation.color,
 				comment: annotation.comment,
+				tags: annotation.tags.map(tag => ({ ...tag })),
 			},
+			{ applyCreationDefaults: false },
 		);
 		if (newAnnotation) {
 			// Add segment mappings across the new range

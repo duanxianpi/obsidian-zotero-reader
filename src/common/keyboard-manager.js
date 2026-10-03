@@ -7,7 +7,6 @@ import {
 	getCodeCombination,
 	setCaretToEnd
 } from './lib/utilities';
-import { ANNOTATION_COLORS } from './defines';
 
 export class KeyboardManager {
 	constructor(options) {
@@ -34,7 +33,7 @@ export class KeyboardManager {
 		// (e.g. annotation comment editor). Otherwise Obsidian's EditorSuggest
 		// receives both the synthetic event dispatched by the embedded CodeMirror
 		// keymap and this bubbled copy, causing double navigation.
-		if (!event.defaultPrevented && !event.cancelBubble && !isTextBox(event.target) && window.findParentWindow() !== window) {
+		if (!event.defaultPrevented && !event.cancelBubble && !isTextBox(event.target) && !event.target.closest?.(".zotflow-profile-select") && window.findParentWindow() !== window) {
 			try {
 				window.findParentWindow().dispatchEvent(new KeyboardEvent(event.type, {
 					key: event.key,
@@ -56,6 +55,8 @@ export class KeyboardManager {
 	}
 
 	_handleKeyDown(event, view) {
+		// Leave native profile selection keys to the select control.
+		if (event.target.closest?.(".zotflow-profile-select")) return;
 		let ctrl = event.ctrlKey;
 		let cmd = event.metaKey && isMac();
 		// Primary modifier
@@ -114,9 +115,9 @@ export class KeyboardManager {
 			}
 			if (/^\d$/.test(key)) {
 				let idx = parseInt(key) - 1;
-				if (ANNOTATION_COLORS[idx]) {
+				if (this._reader.getAnnotationColors()[idx]) {
 					event.preventDefault();
-					this._reader.setReadAloudAnnotationColor(ANNOTATION_COLORS[idx][1]);
+					this._reader.setReadAloudAnnotationColor(this._reader.getAnnotationColors()[idx][1]);
 					return;
 				}
 			}
@@ -414,19 +415,19 @@ export class KeyboardManager {
 				this._reader._type === 'pdf' && code === 'Alt-Digit8'
 				|| ['epub', 'snapshot'].includes(this._reader._type) && code === 'Alt-Digit4'
 			) && this._reader._state.tool.color) {
-				let idx = ANNOTATION_COLORS.findIndex(x => x[1] === this._reader._state.tool.color);
-				if (idx === ANNOTATION_COLORS.length - 1) {
+				let idx = this._reader.getAnnotationColors().findIndex(x => x[1] === this._reader._state.tool.color);
+				if (idx === this._reader.getAnnotationColors().length - 1) {
 					idx = 0;
 				}
 				else {
 					idx++;
 				}
-				this._reader.setTool({ color: ANNOTATION_COLORS[idx][1] });
+				this._reader.setTool({ color: this._reader.getAnnotationColors()[idx][1] });
 			}
 			else if (code.startsWith('Digit') && this._reader._state.tool.color) {
 				let idx = parseInt(code.slice(5)) - 1;
-				if (ANNOTATION_COLORS[idx]) {
-					this._reader.setTool({ color: ANNOTATION_COLORS[idx][1] });
+				if (this._reader.getAnnotationColors()[idx]) {
+					this._reader.setTool({ color: this._reader.getAnnotationColors()[idx][1] });
 				}
 			}
 			else if (this._reader._type === 'pdf' && key === 'h' && !readAloudActive) {
@@ -484,7 +485,7 @@ export class KeyboardManager {
 		// (e.g. annotation comment editor). Otherwise Obsidian's EditorSuggest
 		// receives both the synthetic event dispatched by the embedded CodeMirror
 		// keymap and this bubbled copy, causing double navigation.
-		if (!event.defaultPrevented && !event.cancelBubble && !isTextBox(event.target) && window.findParentWindow() !== window) {
+		if (!event.defaultPrevented && !event.cancelBubble && !isTextBox(event.target) && !event.target.closest?.(".zotflow-profile-select") && window.findParentWindow() !== window) {
 			try {
 				window.findParentWindow().dispatchEvent(new KeyboardEvent(event.type, {
 					key: event.key,

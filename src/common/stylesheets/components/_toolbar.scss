@@ -173,3 +173,23 @@
 		box-shadow: 0 0 0 var(--width-focus-border) var(--color-focus-search);
 	}
 }
+
+// ZotFlow profile controls use the same keyboard/touch focus system as the toolbar.
+.zotflow-profile-select {
+	max-width: min(150px, 25vw);
+	color: var(--fill-primary);
+	background: var(--material-toolbar);
+	min-height: 28px;
+}
+
+.toolbar.zotflow-has-profiles {
+	overflow-x: auto;
+	overflow-y: hidden;
+	column-gap: 12px;
+	scrollbar-width: none;
+	&::-webkit-scrollbar { display: none; }
+	.start, .center, .end, .toolbar-button, .toolbar-dropdown-button,
+	.toolbar-text-input, .divider, .zotflow-profile-select { flex-shrink: 0; }
+	#numPages div { position: static; }
+	.reading-progress { bottom: 0; }
+}

@@ -21,6 +21,7 @@ class AnnotationManager {
 		this._annotations = options.annotations;
 		this._onChangeFilter = options.onChangeFilter;
 		this._onSave = options.onSave;
+		this._onCreate = options.onCreate;
 		this._onDelete = options.onDelete;
 		this._onChangeHistory = options.onChangeHistory;
 		this._adjustTextAnnotationPosition = options.adjustTextAnnotationPosition;
@@ -74,7 +75,7 @@ class AnnotationManager {
 		this.render();
 	}
 
-	addAnnotation(annotation) {
+	addAnnotation(annotation, { applyCreationDefaults = true } = {}) {
 		if (this._readOnly) {
 			return null;
 		}
@@ -92,6 +93,7 @@ class AnnotationManager {
 		annotation.text = annotation.text || '';
 		annotation.comment = annotation.comment || '';
 		annotation.tags = annotation.tags || [];
+		if (applyCreationDefaults) this._onCreate?.(annotation);
 		// Automatically set properties
 		annotation.id = this._generateObjectKey();
 		annotation.dateCreated = (new Date()).toISOString();

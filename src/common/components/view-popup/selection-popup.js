@@ -1,7 +1,6 @@
 import React from 'react';
 import { useLocalization } from '@fluent/react';
 import cx from 'classnames';
-import { ANNOTATION_COLORS } from '../../defines';
 import ViewPopup from './common/view-popup';
 import CustomSections from '../common/custom-sections';
 
@@ -24,7 +23,7 @@ function SelectionPopup(props) {
 
 	return (
 		<ViewPopup
-			className="selection-popup"
+			className={cx("selection-popup", { "zotflow-labeled-palette": props.annotationColors.some(color => color[3]) })}
 			rect={props.params.rect}
 			anchorPoint={props.params.anchorPoint}
 			uniqueRef={{}}
@@ -33,13 +32,14 @@ function SelectionPopup(props) {
 			preferLeft={props.params.preferLeft}
 		>
 			<div className="colors" data-tabstop={1}>
-				{ANNOTATION_COLORS.map((color, index) => (<button
+				{props.annotationColors.map((color, index) => (<button
 					key={index}
 					tabIndex={-1}
-					className="toolbar-button color-button"
-					title={l10n.getString(color[0])}
+					className={cx("toolbar-button color-button", { "zotflow-labeled-color": !!color[3] })}
+					title={color[2]}
+						aria-label={color[2]}
 					onClick={() => handleColorPick(color[1])}
-				><IconColor16 color={color[1]}/></button>))}
+				><IconColor16 color={color[1]}/>{color[3] && <span className="zotflow-palette-label">{color[3]}</span>}</button>))}
 			</div>
 			<div className="tool-toggle" data-tabstop={1}>
 				<button

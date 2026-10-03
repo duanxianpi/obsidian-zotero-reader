@@ -48,6 +48,9 @@ export default class ZoteroReaderAdapter {
 			onAddToNote: () => {
 				this.emit({ type: "addToNote" });
 			},
+			onAnnotationProfileChanged: (profileId) => {
+				this.emit({ type: "annotationProfileChanged", profileId });
+			},
 			onSaveAnnotations: (annotations) => {
 				console.log("Save annotations", annotations);
 				this.emit({ type: "annotationsSaved", annotations });
@@ -393,9 +396,13 @@ export default class ZoteroReaderAdapter {
 		};
 	}
 
+	setAnnotationProfileConfig(config) {
+		this.reader?.setAnnotationProfileConfig(config);
+	}
+
 	addAnnotation(annotation) {
 		if (this.reader) {
-			this.reader._annotationManager.addAnnotation(annotation);
+			this.reader._annotationManager.addAnnotation(annotation, { applyCreationDefaults: false });
 		}
 	}
 

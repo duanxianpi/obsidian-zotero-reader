@@ -3,7 +3,6 @@ import { useLocalization } from '@fluent/react';
 import cx from 'classnames';
 import { SidebarPreview } from '../common/preview';
 import { IconColor16, IconTagCircle, IconUser } from "../common/icons";
-import { ANNOTATION_COLORS } from "../../defines";
 import { pressedNextKey, pressedPreviousKey, setCaretToEnd } from '../../lib/utilities';
 import { ReaderContext } from '../../reader';
 
@@ -36,7 +35,8 @@ function Selector({ tags, colors, authors, onContextMenu, onClickTag, onClickCol
 						key={index}
 						tabIndex={-1}
 						className={cx('color', { selected: color.selected, inactive: color.inactive })}
-						title={color.name ? l10n.getString(color.name) : null}
+						title={color.name || color.color}
+						aria-label={color.name || color.color}
 						onClick={() => onClickColor(color.color)}
 						onDragOver={handleDragOver}
 						onDragLeave={handleDragLeave}
@@ -368,12 +368,12 @@ const AnnotationsView = memo(React.forwardRef((props, ref) => {
 		}
 		let color = annotation.color;
 		if (!colors[color]) {
-			let predefinedColor = ANNOTATION_COLORS.find(x => x[1] === color);
+			let predefinedColor = props.annotationColors.find(x => x[1] === color);
 			colors[color] = {
 				color,
 				selected: props.filter.colors.includes(color),
 				inactive: true,
-				name: predefinedColor ? predefinedColor[0] : null
+				name: predefinedColor ? predefinedColor[2] : color
 			};
 		}
 		let author = annotation.authorName;
@@ -434,7 +434,7 @@ const AnnotationsView = memo(React.forwardRef((props, ref) => {
 	});
 
 	let primaryColors = [];
-	for (let annotationColor of ANNOTATION_COLORS) {
+	for (let annotationColor of props.annotationColors) {
 		if (colors[annotationColor[1]]) {
 			primaryColors.push(colors[annotationColor[1]]);
 			delete colors[annotationColor[1]];

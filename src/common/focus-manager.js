@@ -110,6 +110,8 @@ export class FocusManager {
 	}
 
 	_handleKeyDown(e) {
+		// Arrow keys change the native profile selector; Tab still moves groups.
+		if (e.target.closest(".zotflow-profile-select") && e.key !== "Tab") return;
 		// Switch focus back to the view if trying to resize highlight/underline annotation,
 		// but currently sidebar/popup comment is focused
 		let emptyComment = true;

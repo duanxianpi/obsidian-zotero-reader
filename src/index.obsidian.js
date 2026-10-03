@@ -49,6 +49,11 @@ import { initializeEditorMathJax } from "./obsidian-mathjax.js";
 				}
 				return true;
 			},
+			async setAnnotationProfileConfig(config) {
+				if (destroyed) return false;
+				readerAdapter.setAnnotationProfileConfig(config);
+				return true;
+			},
 			async setColorScheme(colorScheme) {
 				readerAdapter.applyColorSchemeForAll(colorScheme);
 				return true;

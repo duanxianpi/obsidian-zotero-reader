@@ -1,8 +1,6 @@
 import { ObsidianBridge } from '../obsidian-adapter';
 import {
-	ANNOTATION_COLORS,
 	DEFAULT_THEMES,
-	EXTRA_INK_AND_TEXT_COLORS,
 	INK_ANNOTATION_WIDTH_STEPS,
 	TEXT_ANNOTATION_FONT_SIZE_STEPS
 } from './defines';
@@ -30,10 +28,7 @@ function createItemGroup(itemGroups) {
 }
 
 export function createColorContextMenu(reader, params) {
-	let colors = ANNOTATION_COLORS.slice();
-	if (['text', 'ink', 'eraser'].includes(reader._state.tool.type)) {
-		colors.push(...EXTRA_INK_AND_TEXT_COLORS);
-	}
+	let colors = reader.getAnnotationColors(['text', 'ink', 'eraser'].includes(reader._state.tool.type));
 	return {
 		internal: true,
 		x: params.x,
@@ -41,15 +36,17 @@ export function createColorContextMenu(reader, params) {
 		itemGroups: createItemGroup([
 			...[
 				reader._state.tool.type === 'eraser'
-					? colors.map(([label, color]) => ({
-						label: reader._getString(label),
+					? colors.map(([label, color, title]) => ({
+						label,
+						title,
 						disabled: reader._state.readOnly,
 						checked: color === reader._state.tool.color,
 						color: color,
 						onCommand: () => reader.setTool({ type: 'ink', color })
 					}))
-					: colors.map(([label, color]) => ({
-						label: reader._getString(label),
+					: colors.map(([label, color, title]) => ({
+						label,
+						title,
 						disabled: reader._state.readOnly,
 						checked: color === reader._state.tool.color,
 						color: color,
@@ -121,8 +118,9 @@ export function createReadAloudAnnotationContextMenu(reader, params) {
 					}
 				}
 			],
-			ANNOTATION_COLORS.map(([label, color]) => ({
-				label: reader._getString(label),
+			reader.getAnnotationColors().map(([label, color, title]) => ({
+				label,
+				title,
 				checked: color === annotation.color,
 				color: color,
 				onCommand: () => {
@@ -320,9 +318,9 @@ export function createAnnotationContextMenu(reader, params) {
 	let annotations = reader._state.annotations.filter(x => params.ids.includes(x.id));
 	let readOnly = reader._state.readOnly || annotations.some(x => x.readOnly);
 	let currentColor = annotations.length === 1 && annotations[0].color;
-	let colors = ANNOTATION_COLORS.slice();
-	if (annotations.every(x => ['text', 'ink'].includes(x.type))) {
-		colors.push(...EXTRA_INK_AND_TEXT_COLORS);
+	let colors = reader.getAnnotationColors(annotations.every(x => ['text', 'ink'].includes(x.type)));
+	if (currentColor && !colors.some(([, color]) => color === currentColor)) {
+		colors.push([`Current color (${currentColor})`, currentColor, `Current color (${currentColor})`]);
 	}
 	return {
 		internal: true,
@@ -372,8 +370,9 @@ export function createAnnotationContextMenu(reader, params) {
 					onCommand: () => ObsidianBridge?.copyAnnotationCitation(annotations, 'wikilink')
 				},
 			] : [],
-			colors.map(([label, color]) => ({
-				label: reader._getString(label),
+			colors.map(([label, color, title]) => ({
+				label,
+				title,
 				disabled: readOnly,
 				persistent: true,
 				checked: color === currentColor,

@@ -75,7 +75,7 @@ function Toolbar(props) {
 	}
 
 	return (
-		<div className="toolbar" data-tabstop={1} role="application">
+		<div className={cx("toolbar", { "zotflow-has-profiles": props.annotationProfileConfig?.profiles.length > 1 })} data-tabstop={1} role="application">
 			<div className="start">
 				<button
 					id="sidebarToggle"
@@ -84,6 +84,14 @@ function Toolbar(props) {
 					tabIndex={-1}
 					onClick={handleSidebarButtonClick}
 				><IconSidebar/></button>
+				{props.annotationProfileConfig?.profiles.length > 1 && <select
+					className="zotflow-profile-select" data-tabstop={1} tabIndex={-1}
+					aria-label="Annotation profile" title="Annotation profile (this reader only)"
+					value={props.annotationProfileConfig.activeProfileId}
+					onChange={event => props.onChangeAnnotationProfile(event.target.value)}
+				>
+					{props.annotationProfileConfig.profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+				</select>}
 				<div className="divider"/>
 				<button
 					id="zoomOut"
@@ -269,6 +277,7 @@ function Toolbar(props) {
 				</button>
 			</div>
 			<div className="end">
+
 				<CustomSections type="Toolbar"/>
 				<button
 					id="appearance"

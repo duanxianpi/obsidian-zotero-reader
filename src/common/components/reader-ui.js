@@ -53,6 +53,7 @@ function View(props) {
 			/>
 			{state[name + 'ViewSelectionPopup'] && !state.readOnly &&
 				<SelectionPopup
+						annotationColors={state.annotationColors}
 					params={state[name + 'ViewSelectionPopup']}
 					textSelectionAnnotationMode={state.textSelectionAnnotationMode}
 					enableAddToNote={state.enableAddToNote}
@@ -122,6 +123,8 @@ const ReaderUI = React.forwardRef((props, ref) => {
 			<Fragment>
 				<div>
 					<Toolbar
+						annotationProfileConfig={state.annotationProfileConfig}
+						onChangeAnnotationProfile={props.onChangeAnnotationProfile}
 						type={props.type}
 						pageIndex={viewStats.pageIndex || 0}
 						pageLabel={viewStats.pageLabel || ''}
@@ -189,6 +192,7 @@ const ReaderUI = React.forwardRef((props, ref) => {
 								}
 								annotationsView={
 									<AnnotationsView
+									annotationColors={state.annotationColors}
 										ref={annotationsViewRef}
 										type={props.type}
 										readOnly={state.readOnly}

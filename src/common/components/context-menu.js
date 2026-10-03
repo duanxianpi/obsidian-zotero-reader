@@ -23,6 +23,8 @@ function BasicRow({ item, onClose }) {
 			className={cx('row basic', { checked: item.checked })}
 			onClick={(event) => handleClick(event, item)}
 			disabled={item.disabled}
+			title={item.title}
+			aria-label={item.title || item.label}
 		>
 			{item.color && <div className="icon"><IconColor16 color={item.color}/></div>}
 			{Icon && <div className="icon"><Icon/></div>}
@@ -83,6 +85,8 @@ function SliderRow({ item }) {
 				className="slider"
 				id="myRange"
 				disabled={item.disabled}
+			title={item.title}
+			aria-label={item.title || item.label}
 				onChange={handleChange}
 			/>
 			<div className="number">{size.toFixed(1)}</div>
